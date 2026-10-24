@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.2.1...via-v0.3.0) (2026-10-24)
+
+
+### Features
+
+* a message to a running Codex or OpenCode agent reaches it at its next step ([230327b](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/230327b48dc7928bb2608898991269fc3113d5e3))
+
 ## [0.2.1](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.2.0...via-v0.2.1) (2026-10-24)
 
 
