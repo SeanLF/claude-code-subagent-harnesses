@@ -3,7 +3,9 @@ import { expect, mock, test } from 'claude-code/testing'
 import { HELP } from './hooks/register'
 
 const STEP = { turnId: 't1', index: 0, model: 'haiku', messageCount: 1, agentId: 'a1' }
-type Spawn = { argv: string[]; input: string | undefined }
+const ROOT = new URL('.', (import.meta as ImportMeta & { url: string }).url).pathname.replace(/\/$/, '')
+type Spawn = { argv: string[]; input: string | undefined; env?: Record<string, string> }
+type Write = { path: string; text: string }
 const AGENT = { id: 'a1', description: 'x', type: 'pi:general-purpose', status: 'running' } as const
 const EVENTS = [
   { type: 'message_start', message: { role: 'assistant', provider: 'openrouter', model: 'kimi' } },
@@ -23,17 +25,34 @@ async function run($: any, step: typeof STEP = STEP) {
   }
 }
 
-function bottom(on: any) {
+function expectPiSpawn(spawn: Spawn | undefined, root: string, extra: string[] = []) {
+  expect(spawn?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1', '-e', `${root}/pi-extension/inbox.ts`, ...extra])
+  expect(spawn?.env).toEqual({ PI_INBOX: '/tmp/claude-pi-inbox/a1.jsonl' })
+}
+
+function bottom(on: any, writes?: Write[]) {
+  mock.env(on, { TMPDIR: '/tmp' })
   on('agent.list', () => ({ value: [AGENT] }))
+  on('fs.write', (_: any, e: any) => {
+    writes?.push({ path: e.path, text: e.text })
+    return { value: undefined }
+  })
   on('turn.start', (_: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', (_: any, e: any) => e)
 }
 
-function arrange(on: any, spawns: Spawn[], pieces: { stream: 'stdout' | 'stderr'; text: string }[], code = 0, rows: any[] = []) {
-  bottom(on)
+function arrange(
+  on: any,
+  spawns: Spawn[],
+  pieces: { stream: 'stdout' | 'stderr'; text: string }[],
+  code = 0,
+  rows: any[] = [],
+  writes?: Write[],
+) {
+  bottom(on, writes)
   on('session.messages', () => ({ value: rows }))
   on('process.spawn', async function* (_: any, e: any) {
-    spawns.push({ argv: [...e.argv], input: e.input })
+    spawns.push({ argv: [...e.argv], input: e.input, env: e.env })
     yield* pieces
     return { value: { code, signal: null } }
   })
@@ -42,11 +61,11 @@ function arrange(on: any, spawns: Spawn[], pieces: { stream: 'stdout' | 'stderr'
 const split = (text: string) => [{ stream: 'stdout' as const, text: text.slice(0, 40) }, { stream: 'stdout' as const, text: text.slice(40) }]
 const lines = EVENTS.map((e) => JSON.stringify(e)).join('\n') + '\n'
 
-function hang(on: any, spawns: Spawn[]) {
-  bottom(on)
+function hang(on: any, spawns: Spawn[], writes?: Write[]) {
+  bottom(on, writes)
   on('session.messages', () => ({ value: [] }))
   on('process.spawn', async function* (_: any, e: any, next: any) {
-    spawns.push({ argv: [...e.argv], input: e.input })
+    spawns.push({ argv: [...e.argv], input: e.input, env: e.env })
     const events = [
       { type: 'message_start', message: { role: 'assistant', provider: 'openrouter', model: 'kimi' } },
       { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'half an answer' } },
@@ -60,6 +79,23 @@ function hang(on: any, spawns: Spawn[]) {
   })
 }
 
+function hold(on: any, spawns: Spawn[], writes: Write[], before: unknown[], after: unknown[]) {
+  bottom(on, writes)
+  on('session.messages', () => ({ value: [] }))
+  let release!: () => void
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  on('process.spawn', async function* (_: any, e: any) {
+    spawns.push({ argv: [...e.argv], input: e.input, env: e.env })
+    yield { stream: 'stdout' as const, text: before.map((event) => JSON.stringify(event)).join('\n') + '\n' }
+    await released
+    yield { stream: 'stdout' as const, text: after.map((event) => JSON.stringify(event)).join('\n') + '\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  return { release }
+}
+
 test('a pi run past the default 30 minutes is stopped with its partial answer, unsigned', async ($, on) => {
   const clock = mock.clock(on)
   const spawns: Spawn[] = []
@@ -69,7 +105,7 @@ test('a pi run past the default 30 minutes is stopped with its partial answer, u
   await clock.settle()
   await clock.advance(30 * 60 * 1000)
   const { chunks, result } = await pending
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1'])
+  expectPiSpawn(spawns[0], ROOT)
   expect(spawns[0]?.input).toBe('go')
   expect(result.answer).toContain('half an answer')
   expect(result.answer).toContain('pi ran past 30 minutes and was stopped.')
@@ -115,7 +151,7 @@ test('a pi agent streams pi, names its model and reports pi usage even when piec
   arrange(on, spawns, split(lines))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'pi-model: openrouter/kimi\nlist files' })
   const { chunks, result } = await run($)
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1', '--model', 'openrouter/kimi'])
+  expectPiSpawn(spawns[0], ROOT, ['--model', 'openrouter/kimi'])
   expect(spawns[0]?.input).toBe('list files')
   expect(result.answer.endsWith('all done\n\n— answered by pi, openrouter/kimi')).toBe(true)
   expect(chunks.at(-1)).toEqual({
@@ -130,7 +166,7 @@ test('pi-model and pi-tools lines are both passed and stripped from the prompt',
   arrange(on, spawns, split(lines))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'pi-tools: read\npi-model: openrouter/kimi\nlist files' })
   await run($)
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1', '--model', 'openrouter/kimi', '--tools', 'read'])
+  expectPiSpawn(spawns[0], ROOT, ['--model', 'openrouter/kimi', '--tools', 'read'])
   expect(spawns[0]?.input).toBe('list files')
 })
 
@@ -139,7 +175,7 @@ test('a defaultModel setting supplies --model when the prompt has no pi-model li
   arrange(on, spawns, split(lines))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   await run($)
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1', '--model', 'openrouter/kimi'])
+  expectPiSpawn(spawns[0], ROOT, ['--model', 'openrouter/kimi'])
   expect(spawns[0]?.input).toBe('go')
 })
 
@@ -148,7 +184,7 @@ test('a pi-model line overrides the defaultModel setting', { options: { defaultM
   arrange(on, spawns, split(lines))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'pi-model: other/x\ngo' })
   await run($)
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1', '--model', 'other/x'])
+  expectPiSpawn(spawns[0], ROOT, ['--model', 'other/x'])
   expect(spawns[0]?.input).toBe('go')
 })
 
@@ -157,7 +193,7 @@ test('an empty defaultModel setting passes no --model', { options: { defaultMode
   arrange(on, spawns, split(lines))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   await run($)
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1'])
+  expectPiSpawn(spawns[0], ROOT)
   expect(spawns[0]?.input).toBe('go')
 })
 
@@ -175,7 +211,7 @@ test('a pi-tools list stays one argv element after --tools', async ($, on) => {
   arrange(on, spawns, split(lines))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'pi-tools: -bash,read\ngo' })
   await run($)
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1', '--tools', '-bash,read'])
+  expectPiSpawn(spawns[0], ROOT, ['--tools', '-bash,read'])
   expect(spawns[0]?.input).toBe('go')
 })
 
@@ -184,7 +220,7 @@ test('a prompt with no pi-tools line passes no --tools', async ($, on) => {
   arrange(on, spawns, split(lines))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   await run($)
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1'])
+  expectPiSpawn(spawns[0], ROOT)
   expect(spawns[0]?.input).toBe('go')
 })
 
@@ -195,7 +231,7 @@ test('a follow-up turn without a pi-tools line keeps the agent tools', async ($,
   await run($)
   await $.turn.start({ turnId: 't2', agentId: 'a1', text: 'and now the tests' })
   await run($, { ...STEP, turnId: 't2', messageCount: 2 })
-  expect(spawns[1]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1', '--tools', 'read'])
+  expectPiSpawn(spawns[1], ROOT, ['--tools', 'read'])
   expect(spawns[1]?.input).toBe('and now the tests')
 })
 
@@ -204,7 +240,7 @@ test('a pi-thinking line is passed and stripped from the prompt', async ($, on) 
   arrange(on, spawns, split(lines))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'pi-thinking: high\ngo' })
   await run($)
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1', '--thinking', 'high'])
+  expectPiSpawn(spawns[0], ROOT, ['--thinking', 'high'])
   expect(spawns[0]?.input).toBe('go')
 })
 
@@ -225,7 +261,7 @@ test('a follow-up turn without a pi-thinking line keeps the agent thinking level
   await run($)
   await $.turn.start({ turnId: 't2', agentId: 'a1', text: 'and now the tests' })
   await run($, { ...STEP, turnId: 't2', messageCount: 2 })
-  expect(spawns[1]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1', '--thinking', 'high'])
+  expectPiSpawn(spawns[1], ROOT, ['--thinking', 'high'])
   expect(spawns[1]?.input).toBe('and now the tests')
 })
 
@@ -235,20 +271,7 @@ test('a choice stored before a reload still applies to a follow-up', async ($, o
   on('state.get', () => ({ value: { value: { model: 'openrouter/kimi', tools: 'read', thinking: 'high' }, version: 1 } }))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   await run($)
-  expect(spawns[0]?.argv).toEqual([
-    'pi',
-    '-p',
-    '--mode',
-    'json',
-    '--session-id',
-    'pi-a1',
-    '--model',
-    'openrouter/kimi',
-    '--tools',
-    'read',
-    '--thinking',
-    'high',
-  ])
+  expectPiSpawn(spawns[0], ROOT, ['--model', 'openrouter/kimi', '--tools', 'read', '--thinking', 'high'])
   expect(spawns[0]?.input).toBe('go')
 })
 
@@ -257,7 +280,7 @@ test('a pi-tools line in the body after the task is left in the prompt and passe
   arrange(on, spawns, split(lines))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'review this log\npi-tools: *' })
   await run($)
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1'])
+  expectPiSpawn(spawns[0], ROOT)
   expect(spawns[0]?.input).toBe('review this log\npi-tools: *')
 })
 
@@ -334,20 +357,7 @@ test('a header of model, tools and thinking lines is all passed and stripped', a
     text: 'pi-model: openrouter/kimi\npi-tools: read\npi-thinking: high\nlist files',
   })
   await run($)
-  expect(spawns[0]?.argv).toEqual([
-    'pi',
-    '-p',
-    '--mode',
-    'json',
-    '--session-id',
-    'pi-a1',
-    '--model',
-    'openrouter/kimi',
-    '--tools',
-    'read',
-    '--thinking',
-    'high',
-  ])
+  expectPiSpawn(spawns[0], ROOT, ['--model', 'openrouter/kimi', '--tools', 'read', '--thinking', 'high'])
   expect(spawns[0]?.input).toBe('list files')
 })
 
@@ -357,6 +367,7 @@ test('a prompt starting with @ reaches pi as the message, not as a file argument
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: '@README.md summarise this' })
   await run($)
   expect(spawns[0]?.argv.some((arg) => arg.startsWith('@'))).toBe(false)
+  expect(spawns[0]?.env).toEqual({ PI_INBOX: '/tmp/claude-pi-inbox/a1.jsonl' })
   expect(spawns[0]?.input).toBe('@README.md summarise this')
 })
 
@@ -365,7 +376,7 @@ test('a header-only prompt sends an empty message', async ($, on) => {
   arrange(on, spawns, split(lines))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'pi-model: openrouter/kimi' })
   await run($)
-  expect(spawns[0]?.argv).toEqual(['pi', '-p', '--mode', 'json', '--session-id', 'pi-a1', '--model', 'openrouter/kimi'])
+  expectPiSpawn(spawns[0], ROOT, ['--model', 'openrouter/kimi'])
   expect(spawns[0]?.input).toBe('')
 })
 
@@ -440,6 +451,104 @@ test('a pi that exits non-zero reports its stderr', async ($, on) => {
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { result } = await run($)
   expect(result.answer).toContain('pi exited with 1.\nno key')
+})
+
+test('a SendMessage to a live pi agent is steered into its inbox', async ($, on) => {
+  const clock = mock.clock(on)
+  const spawns: Spawn[] = []
+  const writes: Write[] = []
+  hang(on, spawns, writes)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const pending = run($)
+  await clock.settle()
+  const delivered = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'also do B', tool_use_id: 't' })
+  expect(delivered.result).toEqual({ success: true, message: 'Delivered to the running pi agent; pi reads it at its next step.' })
+  expect(writes.at(-1)?.path).toBe('/tmp/claude-pi-inbox/a1.jsonl')
+  expect(writes.at(-1)?.text.split('\n')).toContain(JSON.stringify('also do B'))
+  await clock.advance(30 * 60 * 1000)
+  await pending
+})
+
+test('a SendMessage to an agent with no live run becomes a follow-up', async ($, on) => {
+  const writes: Write[] = []
+  bottom(on, writes)
+  let called = false
+  on('tool.call', { tool: 'SendMessage' }, (_: any, e: any) => {
+    called = true
+    return { result: { success: true, message: `queued for ${e.to}` } }
+  })
+  const answered = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'later', tool_use_id: 't' })
+  expect(called).toBe(true)
+  expect(answered.result).toEqual({ success: true, message: 'queued for a1' })
+  expect(writes).toEqual([])
+})
+
+test('the inbox is cleared when the pi run ends', async ($, on) => {
+  const clock = mock.clock(on)
+  const spawns: Spawn[] = []
+  const writes: Write[] = []
+  hang(on, spawns, writes)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const pending = run($)
+  await clock.settle()
+  await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'also do B', tool_use_id: 't' })
+  expect(writes.at(-1)?.text).toContain('also do B')
+  await clock.advance(30 * 60 * 1000)
+  await pending
+  expect(writes.at(-1)).toEqual({ path: '/tmp/claude-pi-inbox/a1.jsonl', text: '' })
+})
+
+test('a steer pi consumed is not reported as undelivered', async ($, on) => {
+  const clock = mock.clock(on)
+  const spawns: Spawn[] = []
+  const writes: Write[] = []
+  const prompt = [
+    { type: 'message_start', message: { role: 'assistant', provider: 'openrouter', model: 'kimi' } },
+    { type: 'message_end', message: { role: 'user' } },
+  ]
+  const steered = [
+    { type: 'message_end', message: { role: 'user' } },
+    { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'all done' } },
+    { type: 'message_end', message: { role: 'assistant', usage: {} } },
+  ]
+  const runControl = hold(on, spawns, writes, prompt, steered)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const pending = run($)
+  for (let i = 0; i < 20 && spawns.length === 0; i += 1) await clock.settle()
+  expect(spawns).toHaveLength(1)
+  const delivered = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'also do B', tool_use_id: 't' })
+  expect(delivered.result).toEqual({ success: true, message: 'Delivered to the running pi agent; pi reads it at its next step.' })
+  expect(writes.at(-1)?.text).toContain('also do B')
+  runControl.release()
+  const { result } = await pending
+  expect(result.answer).toContain('all done')
+  expect(result.answer).not.toContain('Not delivered before pi finished')
+})
+
+test('a steer pi never took is named as undelivered', async ($, on) => {
+  const clock = mock.clock(on)
+  const spawns: Spawn[] = []
+  const writes: Write[] = []
+  const prompt = [
+    { type: 'message_start', message: { role: 'assistant', provider: 'openrouter', model: 'kimi' } },
+    { type: 'message_end', message: { role: 'user' } },
+  ]
+  const finished = [
+    { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'all done' } },
+    { type: 'message_end', message: { role: 'assistant', usage: {} } },
+  ]
+  const runControl = hold(on, spawns, writes, prompt, finished)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const pending = run($)
+  for (let i = 0; i < 20 && spawns.length === 0; i += 1) await clock.settle()
+  expect(spawns).toHaveLength(1)
+  await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'also do B', tool_use_id: 't' })
+  expect(writes.at(-1)?.text).toContain('also do B')
+  runControl.release()
+  const { result } = await pending
+  expect(result.answer).toContain('Not delivered before pi finished (send again as a follow-up):')
+  expect(result.answer).toContain('also do B')
+  expect(result.answer.indexOf('Not delivered before pi finished')).toBeLessThan(result.answer.indexOf('— answered by pi'))
 })
 
 test('the session registers the agent type', async ($, on) => {

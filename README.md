@@ -18,6 +18,8 @@ or set `CLAUDE_CODE_PLUGIN_DIRS` to the folder.
 
 Ask for pi in plain language: "Have pi review the error handling in src/api."
 
+A message to a running pi agent (for example, a `SendMessage`) reaches it at pi's next step. A message to an idle pi agent is a follow-up, as before.
+
 ### Prompt lines
 
 Prompt lines go at the top of the prompt, one per line, before the task. A `pi-` line further down is ordinary text.

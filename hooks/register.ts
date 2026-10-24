@@ -36,9 +36,13 @@ type Usage = { i: number; o: number; cr: number; cw: number }
 type PiEvent =
   | { k: 'msg'; model: string }
   | { k: 'usage'; usage: Usage; error?: string }
+  | { k: 'user' }
   | { k: 'text' | 'thinking' | 'tool'; t: string }
 
 type Turn = { prompt: string; report?: string; delivered: boolean }
+type Inbox = { path: string; lines: string[] }
+
+const STEER_DELIVERED = 'Delivered to the running pi agent; pi reads it at its next step.'
 
 export type PromptSpec = {
   prompt: string
@@ -92,6 +96,7 @@ export function eventOf(line: string): PiEvent | undefined {
     const usage = { i: u.input ?? 0, o: u.output ?? 0, cr: u.cacheRead ?? 0, cw: u.cacheWrite ?? 0 }
     return e.message.stopReason === 'error' ? { k: 'usage', usage, error: String(e.message.errorMessage ?? 'unknown error') } : { k: 'usage', usage }
   }
+  if (e.type === 'message_end' && e.message?.role === 'user') return { k: 'user' }
   if (delta?.type === 'text_delta') return { k: 'text', t: delta.delta }
   if (delta?.type === 'thinking_delta') return { k: 'thinking', t: delta.delta }
   if (e.type === 'tool_execution_start') {
@@ -126,6 +131,7 @@ export const register: Register = (on, options) => {
   const turns = new Map<string, Turn>()
   const piAgents = new Set<string>()
   const seeds = new Map<string, string>()
+  const inboxes = new Map<string, Inbox>()
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -151,6 +157,20 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     turns.delete(e.turnId)
     return next(e)
+  })
+
+  on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => {
+    const to = typeof e.to === 'string' ? e.to : undefined
+    const message = typeof e.message === 'string' ? e.message : undefined
+    let inbox = to === undefined || message === undefined ? undefined : inboxes.get(to)
+    if (inbox === undefined && to !== undefined) {
+      const named = (await $.agent.list()).find((a) => a.name === to)
+      inbox = named === undefined ? undefined : inboxes.get(named.id)
+    }
+    if (inbox === undefined || message === undefined) return next(e)
+    inbox.lines.push(JSON.stringify(message))
+    await $.fs.write(inbox.path, inbox.lines.map((line) => `${line}\n`).join(''))
+    return { result: { success: true, message: STEER_DELIVERED } }
   })
 
   on('turn.step', async function* ($, e, next) {
@@ -191,6 +211,10 @@ export const register: Register = (on, options) => {
     const model = merged.model || defaultModel || undefined
     const allowed = merged.tools
     const level = merged.thinking
+    const tmp = (await $.env.get('TMPDIR')) || '/tmp'
+    const inbox: Inbox = { path: `${tmp}/claude-pi-inbox/${agentId}.jsonl`, lines: [] }
+    await $.fs.write(inbox.path, '')
+    inboxes.set(agentId, inbox)
     const request = {
       argv: [
         'pi',
@@ -199,10 +223,13 @@ export const register: Register = (on, options) => {
         'json',
         '--session-id',
         `pi-${agentId}`,
+        '-e',
+        `${$.plugin.root}/pi-extension/inbox.ts`,
         ...(model ? ['--model', model] : []),
         ...(allowed ? ['--tools', allowed] : []),
         ...(level ? ['--thinking', level] : []),
       ],
+      env: { PI_INBOX: inbox.path },
       input: asked.prompt,
     }
 
@@ -214,6 +241,7 @@ export const register: Register = (on, options) => {
     let answeredBy = ''
     let failure = ''
     let piError = ''
+    let userMessages = 0
     const total: Usage = { i: 0, o: 0, cr: 0, cw: 0 }
     const push = (k: 'text' | 'thinking', text: string): TurnStepChunk => {
       if (k !== kind) {
@@ -236,6 +264,10 @@ export const register: Register = (on, options) => {
         total.cr += event.usage.cr
         total.cw += event.usage.cw
         piError = event.error ?? ''
+        return []
+      }
+      if (event.k === 'user') {
+        userMessages += 1
         return []
       }
       if (event.k === 'text') report += event.t
@@ -285,6 +317,8 @@ export const register: Register = (on, options) => {
       failure = `pi could not run (is it installed and on PATH?): ${String(err)}`
     } finally {
       timer?.cancel()
+      inboxes.delete(agentId)
+      await $.fs.write(inbox.path, '').catch(() => {})
     }
 
     if (stopped !== undefined) {
@@ -304,6 +338,15 @@ export const register: Register = (on, options) => {
       report = failure
       answeredBy = ''
       yield push('text', `\n${failure}`)
+    }
+    // The first user message_end is the prompt; each later one is a steer pi took.
+    const steers = Math.max(0, userMessages - 1)
+    const undelivered = inbox.lines.slice(steers).map((line) => JSON.parse(line) as string)
+    if (undelivered.length > 0) {
+      const block = `Not delivered before pi finished (send again as a follow-up):\n${undelivered.join('\n')}`
+      const partial = report.trim()
+      report = partial ? `${partial}\n\n${block}` : block
+      yield push('text', `\n\n${block}`)
     }
     const usage: TurnUsage | null = answeredBy
       ? {
