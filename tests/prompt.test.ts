@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { agy } from '../hooks/adapters/agy'
 import { codex } from '../hooks/adapters/codex'
+import { opencode } from '../hooks/adapters/opencode'
 import { pi } from '../hooks/adapters/pi'
 import { descriptionOf, helpOf, promptOf } from '../hooks/prompt'
 
@@ -225,6 +226,18 @@ test('help is generated from the adapter fields', () => {
   expect(HELP).toContain('passed to pi as its tool list')
   expect(HELP).toContain('read is read-only; any other list, such as -bash,read, can still edit')
   expect(HELP).toContain('at its next step')
+  expect(HELP).toContain('interrupt:')
+})
+
+test('help and description say an ACP harness queues a message until it finishes its current answer', () => {
+  for (const adapter of [codex, opencode]) {
+    const help = helpOf(adapter)
+    expect(help).toContain('waits until it finishes its current answer')
+    expect(help).toContain('runs read-only and cannot edit files')
+    expect(help).not.toContain('sandbox')
+    expect(descriptionOf(adapter)).not.toContain('mid-run')
+  }
+  expect(descriptionOf(pi)).toContain('steers it mid-run')
 })
 
 

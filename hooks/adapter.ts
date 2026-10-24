@@ -39,7 +39,7 @@ export type Adapter = {
   readonly readOnly: 'enforced' | 'none'
   readonly tools?: readonly string[] // the only values a tools line may take; absent: a free tool list
   readonly thinking: readonly string[]
-  readonly steer: boolean
+  readonly steer: 'mid-run' | 'after-turn' | false // how a message to a running agent reaches it; false: only as a follow-up
   readonly defaultModel: boolean // takes the plugin's defaultModel setting
   readonly models?: string
   // A folder that voids read-only when found in the working folder or any folder above it, unless

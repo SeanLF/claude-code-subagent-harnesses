@@ -49,7 +49,7 @@ export const pi = {
   modelExample: 'openrouter/moonshotai/kimi-k2',
   readOnly: 'enforced',
   thinking: THINKING,
-  steer: true,
+  steer: 'mid-run',
   defaultModel: true,
   start: ({ choice, prompt, agentId, root, inbox }) => ({
     argv: [

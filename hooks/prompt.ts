@@ -74,7 +74,7 @@ export function helpOf(adapter: HelpAdapter): string {
     `model: <pattern>    passed to ${adapter.bin} as its model (e.g. ${adapter.modelExample}).${adapter.models ? ` ${adapter.models}` : ''}`,
   ]
   if (adapter.readOnly === 'none') lines.push(`tools:              refused: ${name} cannot enforce read-only tools.`)
-  else if (adapter.tools) lines.push(`tools: read         ${name}'s commands and edits run in its read-only sandbox; without a tools line it can edit files.`)
+  else if (adapter.tools) lines.push(`tools: read         ${name} runs read-only and cannot edit files; without a tools line it can.`)
   else lines.push(`tools: <list>       passed to ${name} as its tool list: read is read-only; any other list, such as -bash,read, can still edit and loads the project's .pi extensions.`)
   if (adapter.thinking.length > 0) lines.push(`thinking: <level>   passed to ${name} as its thinking level: ${adapter.thinking.join(', ')}.`)
   else lines.push(`thinking:           refused: ${name} takes no thinking level.`)
@@ -84,10 +84,13 @@ export function helpOf(adapter: HelpAdapter): string {
       : `Model precedence: a model line, then ${name}'s own default.`,
   )
   lines.push(
-    adapter.steer
+    adapter.steer === 'mid-run'
       ? 'A message to a running agent reaches it at its next step; a message to an idle agent is a follow-up.'
-      : 'Messages to an agent are follow-ups: this harness takes no mid-run steering.',
+      : adapter.steer === 'after-turn'
+        ? 'A message to a running agent waits until it finishes its current answer; a message to an idle agent is a follow-up.'
+        : 'Messages to an agent are follow-ups: this harness takes no mid-run steering.',
   )
+  if (adapter.steer) lines.push('A message starting interrupt: stops the current step and runs at once.')
   lines.push(`A genuine answer ends with — answered by ${name}, <model>. Example:`)
   lines.push(`model: ${adapter.modelExample}`)
   if (adapter.thinking.includes('high')) lines.push('thinking: high')
@@ -99,6 +102,11 @@ export function descriptionOf(adapter: HelpAdapter): string {
   const top = [`\`model: ${adapter.modelExample}\``]
   if (adapter.readOnly !== 'none') top.push('`tools: read`')
   if (adapter.thinking.length > 0) top.push('`thinking: high`')
-  const steer = adapter.steer ? ' SendMessage steers it mid-run; one starting `interrupt:` stops its current step first.' : ''
+  const steer =
+    adapter.steer === 'mid-run'
+      ? ' SendMessage steers it mid-run; one starting `interrupt:` stops its current step first.'
+      : adapter.steer === 'after-turn'
+        ? ' SendMessage waits until it finishes its current answer; one starting `interrupt:` stops it and runs at once.'
+        : ''
   return `${adapter.about} Top lines: ${top.join(' ')}. \`via-help\` for more.${steer}`
 }

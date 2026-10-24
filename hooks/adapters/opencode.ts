@@ -44,7 +44,7 @@ export const opencode = {
   tools: ['read'],
   // A model with variants offers opencode's `effort` config option.
   thinking: THINKING,
-  steer: true,
+  steer: 'after-turn',
   defaultModel: false,
   models: 'opencode models lists them.',
   relay: {},

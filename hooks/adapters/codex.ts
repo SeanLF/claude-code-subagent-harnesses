@@ -30,7 +30,7 @@ export const codex = {
   readOnly: 'enforced',
   tools: ['read'],
   thinking: THINKING,
-  steer: true,
+  steer: 'after-turn',
   defaultModel: false,
   // codex-acp and its whole dependency tree, locked with integrity hashes in relay/codex-acp.
   relay: {

@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { arrange, bottom, ENV, hang, hold, lines, run, split, type Spawn, type Write } from './helpers'
+import { steerDelivered } from '../hooks/steer'
 
 test('a SendMessage to a live pi agent is steered into its inbox', async ($, on) => {
   const clock = mock.clock(on)
@@ -253,4 +254,10 @@ test('an interrupt that lands after pi finished keeps the answer and names the i
   expect(result.answer).toContain('all done')
   expect(result.answer).toContain('Not delivered before pi finished')
   expect(result.answer).toContain('too late')
+})
+
+test('a harness that takes a message after its answer is not told it reads it at its next step', () => {
+  expect(steerDelivered('codex', 'after-turn')).toContain('once it finishes its current answer')
+  expect(steerDelivered('codex', 'after-turn')).not.toContain('next step')
+  expect(steerDelivered('pi', 'mid-run')).toContain('at its next step')
 })
