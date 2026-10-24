@@ -3,7 +3,7 @@
   "packages": {
     ".": {
       "release-type": "simple",
-      "package-name": "pi",
+      "package-name": "via",
       "extra-files": [{ "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }]
     }
   }

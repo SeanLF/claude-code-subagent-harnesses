@@ -1,0 +1,3 @@
+# `mise install` once; pnpm's store is shared, so each worktree's install is a few links.
+[tools]
+pnpm = "12.15.0"

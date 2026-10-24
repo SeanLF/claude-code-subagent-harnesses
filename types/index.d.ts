@@ -1,10 +1,10 @@
-export type PiChoice = {
+export type Choice = {
   model?: string
   tools?: string
-  thinking?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  thinking?: string
 }
 declare module 'claude-code' {
   interface PluginState {
-    pi: { agents: StateFamily<PiChoice> }
+    via: { agents: StateFamily<Choice>; sessions: StateFamily<string>; handbacks: StateFamily<boolean>; reports: StateFamily<string>; handedBack: StateFamily<boolean>; modes: StateFamily<string> }
   }
 }

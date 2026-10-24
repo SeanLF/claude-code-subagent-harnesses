@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "codex-acp with its whole dependency tree locked: via installs this with npm ci on first use, unless the codexAcp setting is latest.",
+  "dependencies": {
+    "@agentclientprotocol/codex-acp": "2.2.2"
+  }
+}

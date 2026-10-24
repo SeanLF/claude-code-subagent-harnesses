@@ -1,6 +1,17 @@
 version: 2
 updates:
   # Actions use major tags; this opens a PR when a new major is out.
+  # Dev dependencies are types and the compiler. A harness bump that moves a type
+  # out of reach fails `pnpm typecheck` (see hooks/adapters/pi.ts).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  # What a pinned via installs on people's machines: a bump here is the reviewed update.
+  - package-ecosystem: npm
+    directory: /relay/codex-acp
+    schedule:
+      interval: weekly
   - package-ecosystem: github-actions
     directory: /
     schedule:

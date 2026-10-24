@@ -1,0 +1,20 @@
+{
+  "private": true,
+  "packageManager": "pnpm@12.15.0",
+  "scripts": {
+    "typecheck": "tsc -p . && tsc -p pi-extension && tsc -p relay",
+    "test": "claude plugin test . < /dev/null",
+    "validate": "claude plugin validate --strict . < /dev/null",
+    "build:relay": "esbuild relay/src/relay.mts --bundle --platform=node --format=esm --target=node22 --legal-comments=inline --outfile=relay/relay.mjs --banner:js='// Built from relay/src/relay.mts by pnpm build:relay; do not edit.'"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/sdk": "2.0.2",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@openai/codex-sdk": "0.163.0",
+    "@opencode-ai/sdk": "1.19.4",
+    "@types/node": "26.6.5",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "zod": "4.6.7"
+  }
+}

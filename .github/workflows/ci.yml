@@ -1,7 +1,7 @@
 name: CI
 
 # Claude Code checks the plugin itself: `plugin validate --strict` refuses what
-# the engine would refuse, and `plugin test` runs pi.test.ts against the real
+# the engine would refuse, and `plugin test` runs tests/ against the real
 # engine. Neither needs a login. tsc is not here: the engine's typings are
 # written only by a logged-in session, so it runs locally.
 #
@@ -34,6 +34,14 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code@latest && claude --version
       - name: Validate
         run: claude plugin validate --strict . < /dev/null
+      # relay/relay.mjs is the committed bundle the plugin runs, so a change to its source or to the
+      # bundled SDK must come with a rebuilt bundle.
+      - name: The relay bundle matches its source
+        run: |
+          npx -y pnpm@12.15.0 install --frozen-lockfile
+          npx -y pnpm@12.15.0 build:relay
+          git diff --exit-code relay/relay.mjs
+          rm -rf node_modules
       - name: Test
         run: claude plugin test . < /dev/null
       - name: The checks left nothing behind
