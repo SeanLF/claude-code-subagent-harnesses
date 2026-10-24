@@ -8,11 +8,13 @@ pi runs its own read, bash, edit and write tools outside Claude Code's permissio
 
 ## Install
 
-```sh
-claude --plugin-dir /path/to/cc-plugin-pi-subagents
+In a Claude Code session:
+
+```
+/plugin install pi --marketplace SeanLF/claude-code-pi
 ```
 
-or set `CLAUDE_CODE_PLUGIN_DIRS` to the folder.
+Answer `y` to add the marketplace, then pick a scope. To run a local checkout instead, start Claude Code with `--plugin-dir /path/to/claude-code-pi`.
 
 ## Use
 

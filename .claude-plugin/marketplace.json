@@ -1,0 +1,16 @@
+{
+  "name": "claude-code-pi",
+  "owner": {
+    "name": "Sean Floyd"
+  },
+  "metadata": {
+    "description": "pi, the coding agent CLI, as a Claude Code subagent type."
+  },
+  "plugins": [
+    {
+      "name": "pi",
+      "source": "./",
+      "description": "Hand work to any model pi can reach as a native Claude Code subagent."
+    }
+  ]
+}

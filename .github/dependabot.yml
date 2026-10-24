@@ -1,0 +1,7 @@
+version: 2
+updates:
+  # Actions use major tags; this opens a PR when a new major is out.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

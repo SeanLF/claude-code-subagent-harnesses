@@ -1,0 +1,50 @@
+name: CI
+
+# Claude Code checks the plugin itself: `plugin validate --strict` refuses what
+# the engine would refuse, and `plugin test` runs pi.test.ts against the real
+# engine. Neither needs a login. tsc is not here: the engine's typings are
+# written only by a logged-in session, so it runs locally.
+#
+# Pushes and pull requests pin the CLI, so main never turns red without a
+# change in the repo; the weekly run takes the latest, where an engine API
+# change shows first.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CLAUDE_CODE_VERSION: ${{ github.event_name == 'schedule' && 'latest' || '2.1.310' }}
+
+jobs:
+  plugin:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Install Claude Code
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && claude --version
+      - name: Validate
+        run: claude plugin validate --strict . < /dev/null
+      - name: Test
+        run: claude plugin test . < /dev/null
+      - name: The checks left nothing behind
+        run: |
+          residue=$(git status --porcelain --ignored --untracked-files=all)
+          if [ -n "$residue" ]; then
+            echo "::error::checking the plugin left files in the working tree"
+            echo "$residue"
+            exit 1
+          fi
