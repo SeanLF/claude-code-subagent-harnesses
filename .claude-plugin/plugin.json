@@ -1,8 +1,10 @@
 {
   "name": "pi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A pi subagent type whose model steps run the pi CLI, so pi agents show in Claude Code's agent list, stream live and take follow-ups.",
-  "author": { "name": "Sean Floyd" },
+  "author": {
+    "name": "Sean Floyd"
+  },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
