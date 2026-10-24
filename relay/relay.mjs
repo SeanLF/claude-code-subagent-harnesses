@@ -9636,6 +9636,8 @@ var TerminalHandle = class _TerminalHandle {
 var out = (event) => process.stdout.write(`${JSON.stringify(event)}
 `);
 var agentPid;
+var busy = false;
+var spokeIdle = false;
 var fail = (message) => {
   out({ via: "error", message });
   process.stderr.write(`via relay: ${message}
@@ -9704,6 +9706,7 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
     (resolve) => asked.set(id, (optionId) => resolve(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } }))
   );
 }).onNotification(methods.client.session.update, (ctx) => {
+  if (!busy && ctx.params.update.sessionUpdate === "agent_message_chunk") spokeIdle = true;
   out(ctx.params);
 }).connectWith(stream, async (ctx) => {
   await ctx.request(methods.agent.initialize, {
@@ -9750,6 +9753,43 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
   if (current && "currentValue" in current && typeof current.currentValue === "string") out({ via: "model", name: current.currentValue });
   const queue = [prompt];
   let interrupt;
+  let last;
+  const promptDone = (r) => (
+    // Not in the stable type, but codex-acp and opencode send it.
+    out({ via: "prompt_done", stopReason: r.stopReason, usage: r.usage ?? null })
+  );
+  const steering = /* @__PURE__ */ new Set();
+  const prompted = (text) => ({ sessionId, prompt: [{ type: "text", text }] });
+  const refused = (text, error2) => {
+    process.stderr.write(`via relay: steer refused, queued: ${reason(error2)}
+`);
+    queue.push(text);
+  };
+  let codexSteers = Promise.resolve();
+  const steerCodex = (text) => codexSteers = codexSteers.then(async () => {
+    if (!busy || interrupt !== void 0) return void queue.push(text);
+    const r = await ctx.request("_session/steering", prompted(text)).catch((error2) => refused(text, error2));
+    if (r === void 0) return;
+    if (r.outcome === "injected") return void out({ via: "steered" });
+    if (r.outcome === "startedNewTurn") await ctx.notify(methods.agent.session.cancel, { sessionId }).catch(() => {
+    });
+    queue.push(text);
+  });
+  const steerOpencode = async (text) => {
+    const r = await ctx.request(methods.agent.session.prompt, prompted(text)).catch((error2) => refused(text, error2));
+    if (r === void 0 || r.stopReason === "cancelled") return;
+    out({ via: "steered" });
+    if (spokeIdle) {
+      last = r;
+      promptDone(r);
+    }
+  };
+  const steer = (text) => {
+    const done = (process.env.VIA_STEER === "steering" ? steerCodex(text) : steerOpencode(text)).finally(
+      () => steering.delete(done)
+    );
+    steering.add(done);
+  };
   let offset = 0;
   const inbox = process.env.VIA_INBOX;
   if (inbox)
@@ -9761,8 +9801,10 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
       for (const line of text.slice(offset, end).split("\n")) {
         if (!line.trim()) continue;
         const value = JSON.parse(line);
-        if (typeof value === "string") queue.push(value);
-        else if (typeof value === "object" && value !== null && "answer" in value) {
+        if (typeof value === "string") {
+          if (busy && interrupt === void 0 && process.env.VIA_STEER) steer(value);
+          else queue.push(value);
+        } else if (typeof value === "object" && value !== null && "answer" in value) {
           const { answer, optionId } = value;
           asked.get(answer)?.(optionId ?? null);
           asked.delete(answer);
@@ -9777,12 +9819,19 @@ ${text2}`;
       }
       offset = end + 1;
     }, 300).unref();
-  let last;
-  while (queue.length > 0) {
+  while (queue.length > 0 || steering.size > 0) {
+    if (queue.length === 0) {
+      await Promise.all(steering);
+      continue;
+    }
     const text = queue.shift();
     out({ via: "steered" });
-    last = await ctx.request(methods.agent.session.prompt, { sessionId, prompt: [{ type: "text", text }] }).catch((error2) => fail(reason(error2)));
-    out({ via: "prompt_done", stopReason: last.stopReason, usage: last.usage ?? null });
+    busy = true;
+    spokeIdle = false;
+    const r = await ctx.request(methods.agent.session.prompt, prompted(text)).catch((error2) => fail(reason(error2)));
+    busy = false;
+    last = r;
+    promptDone(r);
     if (interrupt !== void 0) {
       out({ via: "interrupted" });
       queue.unshift(interrupt);

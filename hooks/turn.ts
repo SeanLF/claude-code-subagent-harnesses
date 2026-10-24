@@ -220,7 +220,7 @@ export async function* turnStep(
   // An interrupted run is followed at once by its message, on the same session.
   for (;;) {
     const session = (await $.state.get(sessionRef)).value
-    const inbox = adapter.steer ? await openInbox($, adapter.name, adapter.steer, agentId, w.inboxes) : undefined
+    const inbox = adapter.steer ? await openInbox($, adapter.name, agentId, w.inboxes) : undefined
     result = yield* run(w, adapter, $, e, {
       agentId,
       choice: chosen,

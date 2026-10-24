@@ -229,15 +229,15 @@ test('help is generated from the adapter fields', () => {
   expect(HELP).toContain('interrupt:')
 })
 
-test('help and description say an ACP harness queues a message until it finishes its current answer', () => {
+test('help and description say every ACP harness steers mid-run and takes interrupt:', () => {
   for (const adapter of [codex, opencode]) {
     const help = helpOf(adapter)
-    expect(help).toContain('waits until it finishes its current answer')
+    expect(help).toContain('at its next step')
+    expect(help).toContain('interrupt:')
     expect(help).toContain('runs read-only and cannot edit files')
     expect(help).not.toContain('sandbox')
-    expect(descriptionOf(adapter)).not.toContain('mid-run')
+    expect(descriptionOf(adapter)).toContain('steers it mid-run')
   }
-  expect(descriptionOf(pi)).toContain('steers it mid-run')
 })
 
 

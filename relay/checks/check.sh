@@ -1,6 +1,6 @@
 #!/bin/sh
-# Live checks for an ACP agent behind relay/relay.mjs: stream, interrupt, resume, stop, refused model.
-# Usage: check.sh <workdir> <model> <bad-model> -- <agent command...>
+# Live checks for an ACP agent behind relay/relay.mjs: stream, interrupt, resume, stop, refused model, steer.
+# Usage: VIA_STEER=steering|prompt check.sh <workdir> <model> <bad-model> -- <agent command...>
 set -u
 work=$1 model=$2 bad=$3
 shift 4
@@ -59,3 +59,13 @@ pgrep -fl '^sleep 61$' && echo "  ORPHAN sleep" || echo "  no orphan sleep"
 echo "== 5 failure"
 echo "Reply with only the word PONG." | VIA_MODEL=$bad node "$relay" -- "$@" > failure.jsonl 2> failure.err
 echo "  exit $?"; summary failure.jsonl; tail -2 failure.err | sed 's/^/  stderr: /'
+
+echo "== 6 steer"
+: > inbox.jsonl
+pkill -f '^sleep 26$'
+echo "Use your bash tool to run: sleep 26. Then reply DONE." | VIA_INBOX="$work/inbox.jsonl" VIA_MODEL=$model node "$relay" -- "$@" > steer.jsonl 2> steer.err &
+pid=$!
+if wait_for '^sleep 26$'; then echo '"Change of plan: after the sleep, also run: echo STEERED. Then reply with its output and DONE."' >> inbox.jsonl; else echo "  sleep never started"; fi
+wait $pid; echo "  exit $?"; summary steer.jsonl
+# One prompt whose answer has STEERED: the message reached the running prompt, not a second one.
+echo "  prompts: $(grep -c '"via":"prompt_done"' steer.jsonl), steered: $(grep -c '"via":"steered"' steer.jsonl)"

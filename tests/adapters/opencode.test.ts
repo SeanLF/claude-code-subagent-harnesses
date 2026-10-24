@@ -91,6 +91,7 @@ test("outside read-only via injects no agent: opencode runs with the person's ow
   expect(spawns[0]?.env?.OPENCODE_CONFIG_CONTENT).toBeUndefined()
   expect(spawns[0]?.env?.OPENCODE_DISABLE_PROJECT_CONFIG).toBeUndefined()
   expect(spawns[0]?.env?.VIA_POLICY).toBe('ask')
+  expect(spawns[0]?.env?.VIA_STEER).toBe('prompt')
 })
 
 test("only read-only injects an agent; otherwise the permission mode decides how opencode's own questions are answered", () => {

@@ -8,10 +8,19 @@ export type Policy = 'allow' | 'deny' | 'ask'
 export const relayArgv = (root: string, agent: readonly string[]) => ['node', `${root}/relay/relay.mjs`, '--', ...agent]
 
 // What the relay needs from via for one run.
-export function relayEnv(c: { inbox?: string; session?: string; model?: string; agentMode?: string; policy: Policy; config?: Record<string, string> }) {
+// steer: how the agent takes a message mid-run, tested live on each (relay/checks/check.sh).
+export function relayEnv(c: {
+  inbox?: string
+  steer: 'steering' | 'prompt'
+  session?: string
+  model?: string
+  agentMode?: string
+  policy: Policy
+  config?: Record<string, string>
+}) {
   return {
     VIA_POLICY: c.policy,
-    ...(c.inbox ? { VIA_INBOX: c.inbox } : {}),
+    ...(c.inbox ? { VIA_INBOX: c.inbox, VIA_STEER: c.steer } : {}),
     ...(c.session ? { VIA_SESSION: c.session } : {}),
     ...(c.model ? { VIA_MODEL: c.model } : {}),
     ...(c.agentMode ? { VIA_AGENT_MODE: c.agentMode } : {}),

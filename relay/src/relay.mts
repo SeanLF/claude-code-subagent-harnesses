@@ -3,8 +3,11 @@
 //
 // Usage: node relay.mjs -- <agent command...>, with the prompt on stdin.
 // Env:
-//   VIA_INBOX       file of JSON lines via appends: a string queues a follow-up, {"interrupt": text}
-//                   cancels the turn and runs text next, {"answer": id, "optionId": id|null} answers a question
+//   VIA_INBOX       file of JSON lines via appends: a string steers the running prompt (see VIA_STEER) or
+//                   queues a follow-up, {"interrupt": text} cancels the turn and runs text next,
+//                   {"answer": id, "optionId": id|null} answers a question
+//   VIA_STEER       how a string reaches a running prompt: steering (codex-acp's _session/steering), prompt
+//                   (a second session/prompt, which opencode takes at its next step); unset: queued
 //   VIA_SESSION     a session to resume (session/load)
 //   VIA_MODEL       the agent's `model` config option
 //   VIA_AGENT_MODE  the agent's own mode (session/set_mode), such as codex's workspace-write
@@ -22,6 +25,9 @@ type Answer = (optionId: string | null) => void
 
 const out = (event: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(event)}\n`)
 let agentPid: number | undefined
+// busy: a prompt of the main loop is running. spokeIdle: the agent wrote an answer while none was.
+let busy = false
+let spokeIdle = false
 const fail = (message: string): never => {
   out({ via: 'error', message })
   process.stderr.write(`via relay: ${message}\n`)
@@ -104,6 +110,7 @@ const result = await acp
     )
   })
   .onNotification(acp.methods.client.session.update, (ctx) => {
+    if (!busy && ctx.params.update.sessionUpdate === 'agent_message_chunk') spokeIdle = true
     out(ctx.params as unknown as Record<string, unknown>)
   })
   .connectWith(stream, async (ctx) => {
@@ -161,6 +168,50 @@ const result = await acp
 
     const queue = [prompt]
     let interrupt: string | undefined
+    let last: acp.PromptResponse | undefined
+    const promptDone = (r: acp.PromptResponse) =>
+      // Not in the stable type, but codex-acp and opencode send it.
+      out({ via: 'prompt_done', stopReason: r.stopReason, usage: (r as { usage?: unknown }).usage ?? null })
+    // Steers still in flight: the run is not over until each has returned. A steer counts as
+    // `steered` only once the agent has taken it, or a requeued one would count twice.
+    const steering = new Set<Promise<void>>()
+    const prompted = (text: string): acp.PromptRequest => ({ sessionId, prompt: [{ type: 'text', text }] })
+    const refused = (text: string, error: unknown) => {
+      process.stderr.write(`via relay: steer refused, queued: ${reason(error)}\n`)
+      queue.push(text)
+    }
+    // Codex steers go one at a time: a later one must not land in a turn an earlier one's fallback cancels.
+    let codexSteers: Promise<void> = Promise.resolve()
+    const steerCodex = (text: string) =>
+      (codexSteers = codexSteers.then(async () => {
+        // The prompt ended, or is being interrupted, while this one waited.
+        if (!busy || interrupt !== undefined) return void queue.push(text)
+        const r = await ctx.request<{ outcome?: string }>('_session/steering', prompted(text)).catch((error: unknown) => refused(text, error))
+        if (r === undefined) return
+        if (r.outcome === 'injected') return void out({ via: 'steered' })
+        // No turn was left to steer, so codex-acp started one whose end this relay never hears:
+        // cancel it and run the message as an ordinary prompt.
+        if (r.outcome === 'startedNewTurn') await ctx.notify(acp.methods.agent.session.cancel, { sessionId }).catch(() => {})
+        queue.push(text)
+      }))
+    // opencode takes a second prompt at its next step and answers it when all its work is done.
+    const steerOpencode = async (text: string) => {
+      const r = await ctx.request(acp.methods.agent.session.prompt, prompted(text)).catch((error: unknown) => refused(text, error))
+      // Cancelled by an interrupt before it was read: reported undelivered.
+      if (r === undefined || r.stopReason === 'cancelled') return
+      out({ via: 'steered' })
+      // It landed after the prompt ended, so it ran as its own answer.
+      if (spokeIdle) {
+        last = r
+        promptDone(r)
+      }
+    }
+    const steer = (text: string) => {
+      const done: Promise<void> = (process.env.VIA_STEER === 'steering' ? steerCodex(text) : steerOpencode(text)).finally(() =>
+        steering.delete(done),
+      )
+      steering.add(done)
+    }
     let offset = 0
     const inbox = process.env.VIA_INBOX
     if (inbox)
@@ -172,8 +223,11 @@ const result = await acp
         for (const line of text.slice(offset, end).split('\n')) {
           if (!line.trim()) continue
           const value = JSON.parse(line) as unknown
-          if (typeof value === 'string') queue.push(value)
-          else if (typeof value === 'object' && value !== null && 'answer' in value) {
+          if (typeof value === 'string') {
+            // Not into a turn an interrupt is cancelling.
+            if (busy && interrupt === undefined && process.env.VIA_STEER) steer(value)
+            else queue.push(value)
+          } else if (typeof value === 'object' && value !== null && 'answer' in value) {
             const { answer, optionId } = value as { answer: string; optionId?: string | null }
             asked.get(answer)?.(optionId ?? null)
             asked.delete(answer)
@@ -188,13 +242,20 @@ const result = await acp
         offset = end + 1
       }, 300).unref()
 
-    let last: acp.PromptResponse | undefined
-    while (queue.length > 0) {
+    while (queue.length > 0 || steering.size > 0) {
+      if (queue.length === 0) {
+        await Promise.all(steering)
+        continue
+      }
       const text = queue.shift() as string
       out({ via: 'steered' })
-      last = await ctx.request(acp.methods.agent.session.prompt, { sessionId, prompt: [{ type: 'text', text }] }).catch((error: unknown) => fail(reason(error)))
-      // Not in the stable type, but codex-acp and opencode send it.
-      out({ via: 'prompt_done', stopReason: last.stopReason, usage: (last as { usage?: unknown }).usage ?? null })
+      // Cleared here, not after: a resumed session's replayed history arrives before the first prompt.
+      busy = true
+      spokeIdle = false
+      const r = await ctx.request(acp.methods.agent.session.prompt, prompted(text)).catch((error: unknown) => fail(reason(error)))
+      busy = false
+      last = r
+      promptDone(r)
       if (interrupt !== undefined) {
         out({ via: 'interrupted' })
         queue.unshift(interrupt)

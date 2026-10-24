@@ -30,7 +30,7 @@ export const codex = {
   readOnly: 'enforced',
   tools: ['read'],
   thinking: THINKING,
-  steer: 'after-turn',
+  steer: true,
   defaultModel: false,
   // codex-acp and its whole dependency tree, locked with integrity hashes in relay/codex-acp.
   relay: {
@@ -78,7 +78,7 @@ export const codex = {
     return {
       argv: relayArgv(root, adapter),
       env: {
-        ...relayEnv({ inbox, session, model: choice.model, agentMode, policy, config: choice.thinking ? { reasoning_effort: choice.thinking } : {} }),
+        ...relayEnv({ inbox, steer: 'steering', session, model: choice.model, agentMode, policy, config: choice.thinking ? { reasoning_effort: choice.thinking } : {} }),
         // The person's own Codex, not the copy codex-acp bundles.
         CODEX_PATH: 'codex',
         ...(agentMode === 'read-only' ? guard : {}),

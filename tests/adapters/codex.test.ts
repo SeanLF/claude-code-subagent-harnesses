@@ -132,7 +132,7 @@ test('a codex agent runs codex-acp behind the relay, with its prompt on stdin', 
   expect(spawns[0]?.argv.slice(1)).toEqual([`${ROOT}/relay/relay.mjs`, '--', 'node', ENTRY])
   expect(spawns[0]?.argv[0]).toBe('node')
   expect(spawns[0]?.input).toBe('run the tests')
-  expect(spawns[0]?.env).toMatchObject({ VIA_POLICY: 'ask', VIA_AGENT_MODE: 'workspace-write', CODEX_PATH: 'codex', VIA_INBOX: '/home/u/.claude/via/inbox/codex-a1.jsonl' })
+  expect(spawns[0]?.env).toMatchObject({ VIA_POLICY: 'ask', VIA_AGENT_MODE: 'workspace-write', CODEX_PATH: 'codex', VIA_INBOX: '/home/u/.claude/via/inbox/codex-a1.jsonl', VIA_STEER: 'steering' })
 })
 
 test('only the last message is the answer, signed with the model the session runs on, and usage is its context', async ($, on) => {

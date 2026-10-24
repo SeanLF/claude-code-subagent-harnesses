@@ -1,24 +1,19 @@
 import type { EngineInterface, MatchedHook } from 'claude-code'
-import type { Adapter, Ask } from './adapter'
+import type { Ask } from './adapter'
 import { stepOf } from './progress'
 import type { World } from './world'
 
-type Steer = Exclude<Adapter['steer'], false>
 // interrupt: what an `interrupt:` message asked for; the harness aborts its step, and the core runs it next.
-export type Inbox = { name: string; path: string; lines: string[]; steer: Steer; interrupt?: string }
+export type Inbox = { name: string; path: string; lines: string[]; interrupt?: string }
 
 const INTERRUPT = /^interrupt:[ \t]*/i
 
-export const steerDelivered = (name: string, steer: Steer) =>
-  steer === 'mid-run'
-    ? `Delivered to the running ${name} agent; ${name} reads it at its next step.`
-    : `Delivered to the running ${name} agent; ${name} reads it once it finishes its current answer. Start a message with interrupt: to stop that answer first.`
+export const steerDelivered = (name: string) => `Delivered to the running ${name} agent; ${name} reads it at its next step.`
 export const interruptDelivered = (name: string) => `Interrupting the running ${name} agent: it stops its current step, then takes this message.`
 
 export async function openInbox(
   $: Pick<EngineInterface, 'env' | 'fs'>,
   name: string,
-  steer: Steer,
   agentId: string,
   inboxes: Map<string, Inbox>,
 ): Promise<Inbox | undefined> {
@@ -26,7 +21,7 @@ export async function openInbox(
   // folder and write steers or a symlink (fs.write follows links). No usable home: no steering.
   const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
   if (!home) return undefined
-  const inbox: Inbox = { name, path: `${home}/.claude/via/inbox/${name}-${agentId}.jsonl`, lines: [], steer }
+  const inbox: Inbox = { name, path: `${home}/.claude/via/inbox/${name}-${agentId}.jsonl`, lines: [] }
   const opened = await $.fs.write(inbox.path, '').then(() => true, () => false)
   if (!opened) return undefined
   inboxes.set(agentId, inbox)
@@ -72,7 +67,7 @@ export async function sendMessage(w: World, $: Parameters<SendHook>[0], e: Param
   const lines = [...inbox.lines, JSON.stringify(asked === undefined ? message : { interrupt: asked })]
   await $.fs.write(inbox.path, lines.map((line) => `${line}\n`).join(''))
   inbox.lines = lines
-  if (asked === undefined) return { result: { success: true, message: steerDelivered(inbox.name, inbox.steer) } }
+  if (asked === undefined) return { result: { success: true, message: steerDelivered(inbox.name) } }
   inbox.interrupt = inbox.interrupt === undefined ? asked : `${inbox.interrupt}\n\n${asked}`
   return { result: { success: true, message: interruptDelivered(inbox.name) } }
 }

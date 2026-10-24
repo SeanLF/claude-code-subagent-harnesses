@@ -44,7 +44,7 @@ export const opencode = {
   tools: ['read'],
   // A model with variants offers opencode's `effort` config option.
   thinking: THINKING,
-  steer: 'after-turn',
+  steer: true,
   defaultModel: false,
   models: 'opencode models lists them.',
   relay: {},
@@ -66,7 +66,7 @@ export const opencode = {
     return {
       argv: relayArgv(root, ['opencode', 'acp']),
       env: {
-        ...relayEnv({ inbox, session, model: choice.model, policy: run.policy, config }),
+        ...relayEnv({ inbox, steer: 'prompt', session, model: choice.model, policy: run.policy, config }),
         ...injected,
         ...(run.agent ? { OPENCODE_DISABLE_PROJECT_CONFIG: '1' } : {}),
       },
