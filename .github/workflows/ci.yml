@@ -1,0 +1,54 @@
+name: CI
+
+# Claude Code checks the plugin itself: `plugin validate --strict` refuses what
+# the engine would refuse, and `plugin test` runs tests/ against the real
+# engine. Neither needs a login. tsc is not here: the engine's typings are
+# written only by a logged-in session, so it runs locally.
+#
+# Every run takes the latest CLI: the mod API moves between releases, and the
+# weekly run catches a break even when nothing is pushed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plugin:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@latest && claude --version
+      - name: Validate
+        run: claude plugin validate --strict . < /dev/null
+      # relay/relay.mjs is the committed bundle the plugin runs, so a change to its source or to the
+      # bundled SDK must come with a rebuilt bundle.
+      - name: The relay bundle matches its source
+        run: |
+          npx -y pnpm@12.15.0 install --frozen-lockfile
+          npx -y pnpm@12.15.0 build:relay
+          git diff --exit-code relay/relay.mjs
+          rm -rf node_modules
+      - name: Test
+        run: claude plugin test . < /dev/null
+      - name: The checks left nothing behind
+        run: |
+          residue=$(git status --porcelain --ignored --untracked-files=all)
+          if [ -n "$residue" ]; then
+            echo "::error::checking the plugin left files in the working tree"
+            echo "$residue"
+            exit 1
+          fi

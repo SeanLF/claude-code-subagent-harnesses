@@ -1,0 +1,16 @@
+{
+  "name": "claude-code-subagent-harnesses",
+  "owner": {
+    "name": "Sean Floyd"
+  },
+  "metadata": {
+    "description": "Use another coding-agent harness, as a Claude Code subagent type."
+  },
+  "plugins": [
+    {
+      "name": "via",
+      "source": "./",
+      "description": "Hand work to another coding-agent harness as a native Claude Code subagent."
+    }
+  ]
+}

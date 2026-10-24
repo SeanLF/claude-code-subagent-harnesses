@@ -1,0 +1,253 @@
+import type { StreamHook } from 'claude-code'
+import type { Choice } from '../types'
+import type { Adapter, Mode } from './adapter'
+import { deliver, handbackAsked, respond, textChunks } from './handback'
+import { helpOf, isModel, promptOf } from './prompt'
+import { notActive, run } from './run'
+import { openInbox } from './steer'
+import type { World } from './world'
+
+type StepHook = StreamHook<'turn.step'>
+
+async function adapterOf(w: World, $: Parameters<StepHook>[0], agentId: string): Promise<Adapter | undefined> {
+  if (w.others.has(agentId)) return undefined
+  const known = w.agents.get(agentId)
+  if (known) return known
+  const agent = (await $.agent.list()).find((a) => a.id === agentId)
+  // Not listed yet: decide on a later step rather than caching a guess.
+  if (agent === undefined) return undefined
+  const [plugin, name = ''] = agent.type.split(':')
+  const adapter = plugin === $.plugin.name ? w.adapters.get(name) : undefined
+  if (adapter) w.agents.set(agentId, adapter)
+  else w.others.add(agentId)
+  return adapter
+}
+
+// Persisted first: a reload forgets the map but not the decision.
+async function handbackOf(w: World, $: Parameters<StepHook>[0], agentId: string): Promise<boolean> {
+  const saved = (await $.state.get({ plugin: 'via', key: 'handbacks', id: agentId })).value
+  return saved === true || w.handbacks.get(agentId) === true || (await handbackAsked($, agentId))
+}
+
+// Walks up from the session's folder: relative paths resolve there, and the root is its own parent.
+// Says `unchecked` when it cannot finish (a stat refused, or a hook withheld realPath): not proven clean.
+async function foundAbove($: Parameters<StepHook>[0], folder: string, harmless: readonly string[], skip?: string): Promise<string | 'unchecked' | undefined> {
+  let prefix = ''
+  for (let depth = 0; depth < 64; depth += 1) {
+    const found = await $.fs.stat(`${prefix}${folder}`, { resolve: true }).catch(() => undefined)
+    const hit = found !== undefined && skip !== undefined && found.realPath === skip ? undefined : found
+    if (hit !== undefined && hit.kind !== 'dir') return hit.realPath ?? `${prefix}${folder}`
+    if (hit?.kind === 'dir') {
+      // A folder that cannot be listed is not proven harmless.
+      const entries = await $.fs.list(`${prefix}${folder}`).catch(() => undefined)
+      if (entries === undefined || entries.some((entry) => !harmless.includes(entry.name))) return hit.realPath ?? `${prefix}${folder}`
+    }
+    const here = await $.fs.stat(prefix || '.', { resolve: true }).catch(() => undefined)
+    const up = await $.fs.stat(`${prefix}..`, { resolve: true }).catch(() => undefined)
+    if (!here?.realPath || !up?.realPath) return 'unchecked'
+    if (here.realPath === up.realPath) return undefined
+    prefix += '../'
+  }
+  return 'unchecked'
+}
+
+async function probeModel($: Parameters<StepHook>[0], adapter: Adapter, choice: Choice, session?: string): Promise<string | undefined> {
+  if (!adapter.probe) return undefined
+  const env = adapter.probe.env?.(choice)
+  const asked = await $.process.run(adapter.probe.argv(choice, session), { timeoutMs: 15_000, ...(env ? { env } : {}) }).catch(() => undefined)
+  return asked?.exitCode === 0 ? adapter.probe.model(asked.stdout) : undefined
+}
+
+// Type stripping, which runs relay/relay.mjs as is, is on by default from Node 22.18.
+const nodeOk = (version: string) => {
+  const [major = 0, minor = 0] = version.split('.').map(Number)
+  return major > 22 || (major === 22 && minor >= 18)
+}
+
+// The relay needs Node; an ACP adapter that installs needs its pinned copy, installed once. A string
+// says why the run cannot start.
+async function relayReady(w: World, $: Parameters<StepHook>[0], adapter: Adapter): Promise<{ installed?: string } | string> {
+  if (!adapter.relay) return {}
+  w.node ??= $.process.run(['node', '-p', 'process.versions.node'], { timeoutMs: 15_000 }).then(
+    (r) => (r.exitCode === 0 ? r.stdout.trim() : undefined),
+    () => undefined,
+  )
+  const version = await w.node
+  if (!version || !nodeOk(version))
+    return `${adapter.name} runs through via's relay, which needs Node 22.18 or later on PATH${version ? `, not ${version}` : ''}. Install a current Node LTS and restart Claude Code.`
+  const install = adapter.relay.install
+  if (!install) return {}
+  const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
+  if (!home) return `${adapter.name} needs a home folder to install ${install.dir} into.`
+  const latest = w.codexAcp === 'latest'
+  const dir = `${home}/.claude/via/acp/${latest ? 'latest' : install.dir}`
+  const entry = `${dir}/${install.entry}`
+  let installing = w.installs.get(dir)
+  if (!installing) {
+    installing = (async () => {
+      // In via's own folder, so a project's .npmrc never applies; no install scripts, and no Codex binary:
+      // codex-acp is pointed at the person's own codex.
+      const flags = ['--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund']
+      let argv: string[]
+      if (latest) {
+        // The newest, once per Claude Code session, unpinned: the person chose upstream over review.
+        await $.fs.write(`${dir}/package.json`, '{ "private": true }\n')
+        argv = ['npm', 'install', ...flags, `${install.package}@latest`]
+      } else {
+        if (await $.fs.stat(entry).then((s) => s.kind === 'file', () => false)) return entry
+        for (const file of install.files) await $.fs.write(`${dir}/${file.split('/').at(-1)}`, await $.fs.read(`${$.plugin.root}/${file}`))
+        // Exactly the locked tree, each package's integrity checked by npm.
+        argv = ['npm', 'ci', ...flags]
+      }
+      const done = await $.process.run(argv, { cwd: dir, timeoutMs: 300_000 }).catch((error: unknown) => ({ exitCode: -1, stderr: String(error) }))
+      // Offline, latest keeps the newest it installed before rather than refusing.
+      if (done.exitCode !== 0 && latest && (await $.fs.stat(entry).then((s) => s.kind === 'file', () => false))) return entry
+      if (done.exitCode !== 0) throw new Error(done.stderr.trim().split('\n').slice(-3).join(' ') || `npm ci exited with ${done.exitCode}`)
+      return entry
+    })()
+    w.installs.set(dir, installing)
+  }
+  return installing.then(
+    (installed) => ({ installed }),
+    (error: unknown) => {
+      w.installs.delete(dir)
+      return `${adapter.name} could not install ${install.dir} (npm ci): ${String((error as { message?: unknown })?.message ?? error)}`
+    },
+  )
+}
+
+// A guard that cannot prove a read-only run safe refuses it; the string says why.
+async function readOnlyGuard($: Parameters<StepHook>[0], adapter: Adapter): Promise<Readonly<Record<string, string>> | string | undefined> {
+  const guard = adapter.readOnlyGuard
+  if (!guard) return undefined
+  const listed = await $.process.run(guard.argv, { timeoutMs: 15_000 }).catch(() => undefined)
+  return (listed?.exitCode === 0 ? guard.env(listed.stdout) : undefined) ?? guard.why
+}
+
+export async function* turnStep(
+  w: World,
+  $: Parameters<StepHook>[0],
+  e: Parameters<StepHook>[1],
+  next: Parameters<StepHook>[2],
+) {
+  const agentId = e.agentId
+  if (agentId === undefined) return yield* next(e)
+  const adapter = await adapterOf(w, $, agentId)
+  if (adapter === undefined) return yield* next(e)
+
+  const turn = w.turns.get(e.turnId)
+  if (turn === undefined) {
+    // A compaction can take a step with no turn.start: keep the agent's real answer, not the stub.
+    // Claude Code takes the last text as the result even after a handback, so a delivered report is
+    // repeated as text, and only an undelivered one is handed back.
+    const saved = (await $.state.get({ plugin: 'via', key: 'reports', id: agentId })).value
+    if (saved) {
+      const handed = (await $.state.get({ plugin: 'via', key: 'handedBack', id: agentId })).value === true
+      if (!handed && (await handbackOf(w, $, agentId))) {
+        await $.state.set({ plugin: 'via', key: 'handedBack', id: agentId }, true)
+        return yield* deliver(adapter.name, e, { prompt: '', report: saved, delivered: false }, 0, saved, null)
+      }
+      return yield* respond(e, textChunks(saved), saved)
+    }
+    return yield* respond(e, textChunks(notActive(adapter.name)), notActive(adapter.name))
+  }
+  if (turn.delivered) return yield* respond(e, textChunks(turn.report ?? ''), turn.report ?? '')
+  if (turn.report !== undefined) {
+    await $.state.set({ plugin: 'via', key: 'handedBack', id: agentId }, true)
+    return yield* deliver(adapter.name, e, turn, 0, turn.report, null)
+  }
+
+  const defaultModel = adapter.defaultModel ? w.defaultModel : ''
+  if (defaultModel && !isModel(defaultModel)) {
+    const bad = `The via plugin's defaultModel setting ${JSON.stringify(defaultModel)} is not a ${adapter.name} --model pattern.`
+    return yield* respond(e, textChunks(bad), bad)
+  }
+  const asked = promptOf(turn.prompt, adapter)
+  if (asked.help) return yield* respond(e, textChunks(helpOf(adapter)), helpOf(adapter))
+  if (asked.error !== undefined) {
+    const bad = `${asked.error}\n\n${helpOf(adapter)}`
+    return yield* respond(e, textChunks(bad), bad)
+  }
+
+  const ref = { plugin: 'via', key: 'agents', id: agentId } as const
+  const held = await $.state.get(ref)
+  const merged: Choice = {
+    ...held.value,
+    ...(asked.model ? { model: asked.model } : {}),
+    ...(asked.tools ? { tools: asked.tools } : {}),
+    ...(asked.thinking ? { thinking: asked.thinking } : {}),
+  }
+  const changed =
+    merged.model !== held.value?.model || merged.tools !== held.value?.tools || merged.thinking !== held.value?.thinking
+  if (changed) await $.state.set(ref, merged)
+
+  // What the person allows Claude itself, as the spawn carried it: plan mode is read-only here too.
+  const mode = (w.modes.get(agentId) ?? (await $.state.get({ plugin: 'via', key: 'modes', id: agentId })).value ?? 'default') as Mode
+  const withModel: Choice = merged.model ? merged : { ...merged, ...(defaultModel ? { model: defaultModel } : {}) }
+  if (mode === 'plan' && adapter.readOnly === 'none') {
+    const refused = `${adapter.name} cannot run in plan mode: it has no read-only mode that via can enforce. Leave plan mode to run it, or ask a harness that can enforce read-only.`
+    return yield* respond(e, textChunks(refused), refused)
+  }
+  // Plan mode is read-only whatever tools line the prompt carries: a pi list such as `bash` would run commands.
+  const chosen: Choice = mode === 'plan' ? { ...withModel, tools: adapter.tools?.[0] ?? 'read,grep,find,ls' } : withModel
+  const unsafe = chosen.tools === 'read' ? adapter.unsafeReadOnly : undefined
+  const ownHome = unsafe?.own ? (await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) : undefined
+  const own = ownHome ? (await $.fs.stat(`${ownHome}/${unsafe?.folder}`, { resolve: true }).catch(() => undefined))?.realPath : undefined
+  const found = unsafe ? await foundAbove($, unsafe.folder, unsafe.harmless, own) : undefined
+  if (unsafe && found) {
+    const refused =
+      found === 'unchecked'
+        ? `${adapter.name} cannot run read-only here: this folder and those above it could not all be checked for ${unsafe.folder}, and ${unsafe.why}. To run it anyway, start a new agent without \`tools: read\`, outside plan mode; or ask a harness that can enforce read-only.`
+        : `${adapter.name} cannot run read-only here: ${unsafe.why} (${found}). To run it anyway, start a new agent without \`tools: read\`, outside plan mode; or ask a harness that can enforce read-only.`
+    return yield* respond(e, textChunks(refused), refused)
+  }
+  const guard = chosen.tools === 'read' ? await readOnlyGuard($, adapter) : undefined
+  if (typeof guard === 'string') {
+    const refused = `${adapter.name} cannot run read-only here: ${guard}. To run it anyway, start a new agent without \`tools: read\`, outside plan mode; or ask a harness that can enforce read-only.`
+    return yield* respond(e, textChunks(refused), refused)
+  }
+  const ready = await relayReady(w, $, adapter)
+  if (typeof ready === 'string') return yield* respond(e, textChunks(ready), ready)
+  const sessionRef = { plugin: 'via', key: 'sessions', id: agentId } as const
+  const early = adapter.probe && !adapter.probe.after ? probeModel($, adapter, chosen) : undefined
+  const probe = (latest: string | undefined) => early ?? (latest ? probeModel($, adapter, chosen, latest) : Promise.resolve(undefined))
+  // Only this run's report may answer a later no-turn step: an aborted run leaves none.
+  await $.state.set({ plugin: 'via', key: 'reports', id: agentId }, '')
+  await $.state.set({ plugin: 'via', key: 'handedBack', id: agentId }, false)
+  let prompt = asked.prompt
+  let block = 0
+  let result
+  // An interrupted run is followed at once by its message, on the same session.
+  for (;;) {
+    const session = (await $.state.get(sessionRef)).value
+    const inbox = adapter.steer ? await openInbox($, adapter.name, agentId, w.inboxes) : undefined
+    result = yield* run(w, adapter, $, e, {
+      agentId,
+      choice: chosen,
+      prompt,
+      signal: next.signal,
+      inbox,
+      session,
+      mode,
+      installed: ready.installed,
+      block,
+      guard,
+      probe,
+      // Saved the moment the harness issues it: a reload mid-run must not lose the session.
+      save: async (id) => {
+        if (id !== session) await $.state.set(sessionRef, id)
+      },
+    })
+    if (result.next === undefined) break
+    if (next.signal.aborted) return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], '')
+    prompt = result.next
+    block = result.block
+  }
+  if (result.aborted) return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], '')
+  const handback = await handbackOf(w, $, agentId)
+  turn.report = result.signed
+  await $.state.set({ plugin: 'via', key: 'reports', id: agentId }, result.signed)
+  await $.state.set({ plugin: 'via', key: 'handedBack', id: agentId }, handback)
+  if (handback) return yield* deliver(adapter.name, e, turn, result.block, result.signed, result.usage)
+  return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: result.usage }], result.signed)
+}

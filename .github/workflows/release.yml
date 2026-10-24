@@ -1,0 +1,21 @@
+name: Release
+
+# release-please reads the Conventional Commit subjects on main, keeps a
+# release PR with CHANGELOG.md and the next version in plugin.json, and tags
+# the release when that PR merges. `claude plugin update` acts on the version.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

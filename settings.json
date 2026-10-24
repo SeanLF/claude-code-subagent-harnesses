@@ -1,0 +1,1 @@
+{"subagentStatusLine": {"type": "command", "command": "find \"${HOME:-$USERPROFILE}/.claude/via/rows\" -name '*.jsonl' -mmin -60 -exec cat {} + 2>/dev/null; exit 0"}}

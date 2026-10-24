@@ -1,0 +1,39 @@
+# Sean's call: the ACP PoC uses the SDK published a day before it, inside the release-age cutoff.
+minimumReleaseAgeExclude:
+  - '@agentclientprotocol/sdk@2.0.2'
+# esbuild's install script only checks its platform binary, which its own package already ships.
+allowBuilds:
+  esbuild: false
+# The harness packages are installed for their types only: none of their code runs.
+# Dropped: pi's runtime dependencies its types never reach (179 MB -> 74 MB).
+# A type that moves into one of these turns into `any`; hooks/adapters/pi.ts
+# fails the type check when that happens.
+overrides:
+  '@anthropic-ai/sdk': '-'
+  '@aws-sdk/client-bedrock-runtime': '-'
+  '@earendil-works/pi-codemode': '-'
+  '@earendil-works/pi-mcp': '-'
+  '@earendil-works/pi-telemetry': '-'
+  '@google/genai': '-'
+  '@silvia-odwyer/photon-node': '-'
+  '@smithy/node-http-handler': '-'
+  'brace-expansion': '-'
+  'chalk': '-'
+  'cross-spawn': '-'
+  'diff': '-'
+  'grok-mermaid': '-'
+  'highlight.js': '-'
+  'hosted-git-info': '-'
+  'http-proxy-agent': '-'
+  'https-proxy-agent': '-'
+  'ignore': '-'
+  'jiti': '-'
+  'minimatch': '-'
+  'openai': '-'
+  'partial-json': '-'
+  'proper-lockfile': '-'
+  'quickjs-wasi': '-'
+  'semver': '-'
+  'undici': '-'
+  'yaml': '-'
+  '@openai/codex': '-'
