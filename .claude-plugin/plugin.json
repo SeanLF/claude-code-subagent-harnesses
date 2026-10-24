@@ -1,0 +1,22 @@
+{
+  "name": "pi",
+  "version": "0.1.0",
+  "description": "A pi subagent type whose model steps run the pi CLI, so pi agents show in Claude Code's agent list, stream live and take follow-ups.",
+  "author": { "name": "Sean Floyd" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "defaultModel": {
+      "type": "string",
+      "title": "Default pi model",
+      "description": "pi --model pattern used when a prompt has no pi-model line. Empty: pi's own default (defaultModel in ~/.pi/agent/settings.json).",
+      "default": ""
+    },
+    "timeoutMinutes": {
+      "type": "number",
+      "title": "pi time limit (minutes)",
+      "description": "A pi run longer than this is stopped and its partial output returned.",
+      "default": 30
+    }
+  }
+}
