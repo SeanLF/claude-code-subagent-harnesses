@@ -5,9 +5,8 @@ name: CI
 # engine. Neither needs a login. tsc is not here: the engine's typings are
 # written only by a logged-in session, so it runs locally.
 #
-# Pushes and pull requests pin the CLI, so main never turns red without a
-# change in the repo; the weekly run takes the latest, where an engine API
-# change shows first.
+# Every run takes the latest CLI: the mod API moves between releases, and the
+# weekly run catches a break even when nothing is pushed.
 on:
   push:
     branches: [main]
@@ -18,9 +17,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  CLAUDE_CODE_VERSION: ${{ github.event_name == 'schedule' && 'latest' || '2.1.310' }}
 
 jobs:
   plugin:
@@ -35,7 +31,7 @@ jobs:
         with:
           node-version: 26
       - name: Install Claude Code
-        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && claude --version
+        run: npm install -g @anthropic-ai/claude-code@latest && claude --version
       - name: Validate
         run: claude plugin validate --strict . < /dev/null
       - name: Test
