@@ -8,10 +8,24 @@ const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ma
 type ThinkingLevel = (typeof THINKING_LEVELS)[number]
 const isThinkingLevel = (value: string): value is ThinkingLevel => (THINKING_LEVELS as readonly string[]).includes(value)
 const PI_LINE = /^pi-([A-Za-z]+):[ \t]*(.*?)[ \t]*$/
+const HELP_LINE = /^pi-help[ \t]*$/i
+const isHeader = (line: string) => HELP_LINE.test(line) || PI_LINE.test(line)
 const ANSI = /\u001b\[[0-9;]*m/g
 
 const DESCRIPTION =
-  'Delegates to the pi CLI in an isolated pi session. Use for work you want done by pi\'s model and tools rather than Claude\'s: a second opinion from another provider, or a cheap bulk pass. Runs pi\'s own read/bash/edit/write tools, so it can change files. Configuration lines go at the very top of the prompt, one per line before the task, and nowhere else: a `pi-` line later in the prompt is ordinary text. To choose pi\'s model, put `pi-model: <pattern>` there (anything `pi --model` accepts, such as `openrouter/moonshotai/kimi-k2`; `pi --list-models <search>` lists them); without that line pi uses the plugin\'s defaultModel setting if set, else pi\'s own default. To make pi read-only, put `pi-tools: read` there (any comma-separated list `pi --tools` accepts, such as `-bash,read`); like `pi-model:` it holds for the agent\'s later messages. To set thinking depth, put `pi-thinking: <level>` there, one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, which is the same setting as a `:<level>` suffix on the model (such as `pi-model: x:high`) and likewise holds for later messages. Every genuine answer ends with a line `— answered by pi, <provider/model>`; an answer without it did not come from pi.'
+  'pi CLI agent: any provider\'s model, own tools (edits files). Top lines: `pi-model: openrouter/org/model` `pi-tools: read` `pi-thinking: high`. `pi-help` for more.'
+
+export const HELP = [
+  "pi prompt lines: put them at the top of the prompt, one per line, before the task. Each holds for this agent's later messages until a new line replaces it.",
+  'pi-model: <pattern>    passed as pi --model (e.g. openrouter/moonshotai/kimi-k2); pi --list-models <search> finds patterns.',
+  'pi-tools: <list>       passed as pi --tools (e.g. read for read-only, or -bash,read).',
+  'pi-thinking: <level>   passed as pi --thinking: off, minimal, low, medium, high, xhigh or max.',
+  "Model precedence: a pi-model line, then the plugin's defaultModel setting, then pi's own default.",
+  'A genuine answer ends with — answered by pi, <provider/model>. Example:',
+  'pi-model: openrouter/moonshotai/kimi-k2',
+  'pi-thinking: high',
+  'Review the error handling in src/api.',
+].join('\n')
 
 const NOT_ACTIVE =
   'The pi plugin did not run this task, so pi did not answer it. Check the plugin is loaded in /plugin and restart Claude Code.'
@@ -31,17 +45,23 @@ export type PromptSpec = {
   model?: string
   tools?: string
   thinking?: ThinkingLevel
+  help?: boolean
   error?: string
 }
 
 export function promptOf(text: string): PromptSpec {
   const lines = text.trimStart().split('\n')
   let end = 0
-  while (end < lines.length && PI_LINE.test(lines[end] ?? '')) end += 1
+  while (end < lines.length && isHeader(lines[end] ?? '')) end += 1
   if (end === 0) return { prompt: text }
 
-  const asked: Omit<PromptSpec, 'prompt' | 'error'> = {}
+  const asked: Omit<PromptSpec, 'prompt' | 'error' | 'help'> = {}
+  let help = false
   for (const line of lines.slice(0, end)) {
+    if (HELP_LINE.test(line)) {
+      help = true
+      continue
+    }
     const [, name = '', value = ''] = PI_LINE.exec(line) ?? []
     const key = name.toLowerCase()
     const bad = (why: string) => ({ prompt: text, error: `Invalid pi prompt line ${JSON.stringify(line)}: ${why}` })
@@ -52,7 +72,8 @@ export function promptOf(text: string): PromptSpec {
       asked.thinking ??= value
     } else asked[key as 'model' | 'tools'] ??= value
   }
-  return { prompt: lines.slice(end).join('\n').trim(), ...asked }
+  const prompt = lines.slice(end).join('\n').trim()
+  return help ? { prompt, help } : { prompt, ...asked }
 }
 
 export function eventOf(line: string): PiEvent | undefined {
@@ -151,7 +172,11 @@ export const register: Register = (on, options) => {
       return yield* respond(e, textChunks(bad), bad)
     }
     const asked = promptOf(turn.prompt)
-    if (asked.error !== undefined) return yield* respond(e, textChunks(asked.error), asked.error)
+    if (asked.help) return yield* respond(e, textChunks(HELP), HELP)
+    if (asked.error !== undefined) {
+      const bad = `${asked.error}\n\n${HELP}`
+      return yield* respond(e, textChunks(bad), bad)
+    }
     const ref = { plugin: 'pi', key: 'agents', id: agentId } as const
     const held = await $.state.get(ref)
     const merged: PiChoice = {

@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { HELP } from './hooks/register'
+
 const STEP = { turnId: 't1', index: 0, model: 'haiku', messageCount: 1, agentId: 'a1' }
 type Spawn = { argv: string[]; input: string | undefined }
 const AGENT = { id: 'a1', description: 'x', type: 'pi:general-purpose', status: 'running' } as const
@@ -287,6 +289,40 @@ test('a pi-tools value of more than one word answers without spawning pi', async
   const { result } = await run($)
   expect(spawns).toEqual([])
   expect(result.answer).toContain('"pi-tools: read bash"')
+})
+
+test('a pi-help line alone answers with HELP without spawning pi or storing anything', async ($, on) => {
+  const spawns: Spawn[] = []
+  const writes: unknown[] = []
+  arrange(on, spawns, split(lines))
+  on('state.set', (_: any, e: any) => {
+    writes.push(e.value)
+    return { value: e.value }
+  })
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'pi-help' })
+  const { result } = await run($)
+  expect(spawns).toEqual([])
+  expect(writes).toEqual([])
+  expect(result.answer).toBe(HELP)
+})
+
+test('a pi-help line with a task still answers HELP, case-insensitively, without spawning pi', async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns, split(lines))
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'PI-Help\nlist files' })
+  const { result } = await run($)
+  expect(spawns).toEqual([])
+  expect(result.answer).toBe(HELP)
+})
+
+test('an invalid pi header line answers with its reason and then HELP', async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns, split(lines))
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'pi-tool: read\ngo' })
+  const { result } = await run($)
+  expect(spawns).toEqual([])
+  expect(result.answer.startsWith('Invalid pi prompt line "pi-tool: read": unknown key')).toBe(true)
+  expect(result.answer).toContain(HELP)
 })
 
 test('a header of model, tools and thinking lines is all passed and stripped', async ($, on) => {

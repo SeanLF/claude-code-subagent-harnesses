@@ -28,7 +28,7 @@ Prompt lines go at the top of the prompt, one per line, before the task. A `pi-`
 | `pi-tools: <list>` | Passed to `pi --tools`, such as `read` for a read-only second opinion. |
 | `pi-thinking: <level>` | Passed to `pi --thinking`: one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, the same as a `:<level>` suffix on the model. |
 
-Each line holds for that agent's later messages until a new line replaces it. A malformed or unknown line is answered with the line instead of running pi.
+Each line holds for that agent's later messages until a new line replaces it. A malformed or unknown line is answered with the line instead of running pi. Put `pi-help` alone on the top line to get this syntax back from the agent instead of running pi.
 
 ```text
 pi-model: openrouter/moonshotai/kimi-k2
