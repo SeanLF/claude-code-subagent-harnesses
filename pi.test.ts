@@ -483,6 +483,28 @@ test('a SendMessage to an agent with no live run becomes a follow-up', async ($,
   expect(writes).toEqual([])
 })
 
+test('a SendMessage that asks for an idle notice goes on to the engine', async ($, on) => {
+  const clock = mock.clock(on)
+  const spawns: Spawn[] = []
+  const writes: Write[] = []
+  hang(on, spawns, writes)
+  let called = false
+  on('tool.call', { tool: 'SendMessage' }, () => {
+    called = true
+    return { result: { success: true, message: 'subscribed' } }
+  })
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const pending = run($)
+  await clock.settle()
+  const before = writes.length
+  const answered = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'also do B', notify_when_idle: true, tool_use_id: 't' })
+  expect(called).toBe(true)
+  expect(answered.result).toEqual({ success: true, message: 'subscribed' })
+  expect(writes.length).toBe(before)
+  await clock.advance(30 * 60 * 1000)
+  await pending
+})
+
 test('the inbox is cleared when the pi run ends', async ($, on) => {
   const clock = mock.clock(on)
   const spawns: Spawn[] = []

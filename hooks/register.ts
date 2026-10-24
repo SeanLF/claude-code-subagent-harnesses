@@ -167,9 +167,11 @@ export const register: Register = (on, options) => {
       const named = (await $.agent.list()).find((a) => a.name === to)
       inbox = named === undefined ? undefined : inboxes.get(named.id)
     }
-    if (inbox === undefined || message === undefined) return next(e)
-    inbox.lines.push(JSON.stringify(message))
-    await $.fs.write(inbox.path, inbox.lines.map((line) => `${line}\n`).join(''))
+    // An idle-notice subscription is the engine's to keep, so the call goes on to it.
+    if (inbox === undefined || message === undefined || e.notify_when_idle) return next(e)
+    const lines = [...inbox.lines, JSON.stringify(message)]
+    await $.fs.write(inbox.path, lines.map((line) => `${line}\n`).join(''))
+    inbox.lines = lines
     return { result: { success: true, message: STEER_DELIVERED } }
   })
 
