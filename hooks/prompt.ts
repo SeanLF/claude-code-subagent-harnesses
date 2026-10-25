@@ -2,7 +2,7 @@ import type { HelpAdapter, PromptAdapter } from './adapter'
 
 // A model never starts with '-': passed as its own argument, it would read as a flag. A pi tool list may
 // (-bash,read removes bash), since it always follows --tools.
-const VALUE = { model: /^[A-Za-z0-9_.:\/*~@+][A-Za-z0-9_.:\/*~@+-]*$/, tools: /^[A-Za-z0-9_*+,:.-]+$/, thinking: /^\S+$/ }
+const VALUE = { model: /^[A-Za-z0-9_.:/*~@+][A-Za-z0-9_.:/*~@+-]*$/, tools: /^[A-Za-z0-9_*+,:.-]+$/, thinking: /^\S+$/ }
 type PromptKey = keyof typeof VALUE
 const NEUTRAL_LINE = /^(model|tools|thinking):[ \t]*(.*?)[ \t]*$/
 const ALIAS_LINE = /^([A-Za-z]+)-([A-Za-z]+):[ \t]*(.*?)[ \t]*$/
@@ -49,15 +49,20 @@ export function promptOf(text: string, adapter: PromptAdapter): PromptSpec {
     const value = neutral?.[2] ?? alias?.[3] ?? ''
     const label = neutral ? key : `${adapter.name}-${key}`
     const bad = (why: string) => ({ prompt: text, error: `Invalid ${adapter.name} prompt line ${JSON.stringify(line)}: ${why}` })
-    if (!(key in VALUE)) return bad(`unknown key; known keys are model, tools and thinking (or ${adapter.name}-model, ${adapter.name}-tools and ${adapter.name}-thinking).`)
+    if (!(key in VALUE))
+      return bad(
+        `unknown key; known keys are model, tools and thinking (or ${adapter.name}-model, ${adapter.name}-tools and ${adapter.name}-thinking).`,
+      )
     if (!VALUE[key as PromptKey].test(value)) return bad('expected one whitespace-free value.')
     if (key === 'thinking') {
       if (adapter.thinking.length === 0) return bad(`${label} is not supported: ${adapter.name} takes no thinking level.`)
-      if (!adapter.thinking.includes(value)) return bad(`${label} must be one of ${adapter.thinking.join(', ')}; got ${JSON.stringify(value)}.`)
+      if (!adapter.thinking.includes(value))
+        return bad(`${label} must be one of ${adapter.thinking.join(', ')}; got ${JSON.stringify(value)}.`)
       asked.thinking ??= value
     } else if (key === 'tools') {
       if (adapter.readOnly === 'none') return bad(`${adapter.name} cannot enforce read-only tools, so a tools line is refused.`)
-      if (adapter.tools && !adapter.tools.includes(value)) return bad(`${label} must be one of ${adapter.tools.join(', ')}; got ${JSON.stringify(value)}.`)
+      if (adapter.tools && !adapter.tools.includes(value))
+        return bad(`${label} must be one of ${adapter.tools.join(', ')}; got ${JSON.stringify(value)}.`)
       asked.tools ??= value
     } else {
       asked.model ??= value
@@ -75,8 +80,12 @@ export function helpOf(adapter: HelpAdapter): string {
   ]
   if (adapter.readOnly === 'none') lines.push(`tools:              refused: ${name} cannot enforce read-only tools.`)
   else if (adapter.tools) lines.push(`tools: read         ${name} runs read-only and cannot edit files; without a tools line it can.`)
-  else lines.push(`tools: <list>       passed to ${name} as its tool list: read is read-only; any other list, such as -bash,read, can still edit and loads the project's .pi extensions.`)
-  if (adapter.thinking.length > 0) lines.push(`thinking: <level>   passed to ${name} as its thinking level: ${adapter.thinking.join(', ')}.`)
+  else
+    lines.push(
+      `tools: <list>       passed to ${name} as its tool list: read is read-only; any other list, such as -bash,read, can still edit and loads the project's .pi extensions.`,
+    )
+  if (adapter.thinking.length > 0)
+    lines.push(`thinking: <level>   passed to ${name} as its thinking level: ${adapter.thinking.join(', ')}.`)
   else lines.push(`thinking:           refused: ${name} takes no thinking level.`)
   lines.push(
     adapter.defaultModel

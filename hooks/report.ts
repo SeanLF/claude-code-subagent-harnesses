@@ -61,12 +61,7 @@ export function finish(args: {
   const answer = report.trim()
   // A genuine answer is always signed; an unknown model is said, never guessed.
   const signedBy = args.stopped === undefined && !args.failure
-  const by =
-    named === ''
-      ? 'model not reported'
-      : requested === named
-        ? `${named} (requested)`
-        : named
+  const by = named === '' ? 'model not reported' : requested === named ? `${named} (requested)` : named
   const line = `\n\n— answered by ${name}, ${by}`
   const signed = signedBy ? `${answer}${line}` : answer
   if (signedBy) chunks.push(args.push('text', line))

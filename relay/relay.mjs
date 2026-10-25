@@ -7,7 +7,7 @@ var __export = (target, all) => {
 
 // relay/src/relay.mts
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 
 // node_modules/.pnpm/@agentclientprotocol+sdk@2.0.2_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/schema/index.js
@@ -9639,8 +9639,8 @@ var agentPid;
 var busy = false;
 var spokeIdle = false;
 var fail = (message) => {
-  out({ via: "error", message });
-  process.stderr.write(`via relay: ${message}
+  out({ relay: "error", message });
+  process.stderr.write(`acp relay: ${message}
 `);
   try {
     if (agentPid !== void 0) process.kill(-agentPid, "SIGTERM");
@@ -9648,12 +9648,57 @@ var fail = (message) => {
   }
   process.exit(1);
 };
-var reason = (error2) => String(error2?.message ?? error2);
+var reason = (error2) => {
+  const { message, data } = error2 ?? {};
+  const said = String(message ?? error2);
+  const record2 = typeof data === "object" && data !== null ? data : void 0;
+  const words = typeof data === "string" ? data : typeof record2?.details === "string" ? record2.details : typeof record2?.message === "string" ? record2.message : "";
+  const cause = words.length > 500 ? `${words.slice(0, 500)}\u2026` : words;
+  return cause && !said.includes(cause) ? `${said}: ${cause}` : said;
+};
+var IMAGE_TYPES = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp"
+};
+var realOrNone = (path) => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return void 0;
+  }
+};
+var IMAGE_ROOTS = [process.cwd(), `/tmp/claude-${process.getuid?.() ?? ""}`].flatMap((root) => realOrNone(root) ?? []);
+var MAGIC = {
+  "image/png": (b) => b.subarray(0, 4).equals(Buffer.from([137, 80, 78, 71])),
+  "image/jpeg": (b) => b.subarray(0, 3).equals(Buffer.from([255, 216, 255])),
+  "image/gif": (b) => b.subarray(0, 4).toString("latin1") === "GIF8",
+  "image/webp": (b) => b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP"
+};
+var attached = (text) => {
+  const paths = new Set([...text.matchAll(/(?:^|[\s'"`(<])(\/[^\s'"`<>()]+\.(?:png|jpe?g|gif|webp))\b/gi)].map((m) => m[1]));
+  const blocks = [];
+  for (const path of paths) {
+    if (blocks.length >= 4) break;
+    const mimeType = IMAGE_TYPES[path.split(".").pop()?.toLowerCase() ?? ""];
+    const real = realOrNone(path);
+    if (!mimeType || !real || !IMAGE_ROOTS.some((root) => real.startsWith(`${root}/`))) continue;
+    try {
+      if (statSync(real).size > 5 * 1024 * 1024) continue;
+      const bytes = readFileSync(real);
+      if (MAGIC[mimeType]?.(bytes)) blocks.push({ type: "image", mimeType, data: bytes.toString("base64") });
+    } catch {
+    }
+  }
+  return blocks;
+};
 var dash = process.argv.indexOf("--");
 var [bin, ...args] = dash < 0 ? [] : process.argv.slice(dash + 1);
 if (bin === void 0) fail("usage: relay.mjs -- <agent command...>");
-var policy = process.env.VIA_POLICY ?? "deny";
-if (!["allow", "deny", "ask"].includes(policy)) fail(`VIA_POLICY must be allow, deny or ask, not ${policy}`);
+var policy = process.env.RELAY_POLICY ?? "deny";
+if (!["allow", "deny", "ask"].includes(policy)) fail(`RELAY_POLICY must be allow, deny or ask, not ${policy}`);
 var cwd = process.cwd();
 var prompt = await new Promise((resolve) => {
   let text = "";
@@ -9677,7 +9722,7 @@ var stop = async (code) => {
 process.on("SIGTERM", () => void stop(0));
 process.on("SIGINT", () => void stop(0));
 agent.on("exit", (code) => {
-  out({ via: "agent_exit", code });
+  out({ relay: "agent_exit", code });
   process.exit(code ?? 1);
 });
 var RUN = `${process.pid}-${Date.now().toString(36)}`;
@@ -9687,15 +9732,18 @@ var choose = (options, kind) => {
   const option = options.find((o) => o.kind === kind);
   return { outcome: option ? { outcome: "selected", optionId: option.optionId } : { outcome: "cancelled" } };
 };
-var stream = ndJsonStream2(Writable.toWeb(agent.stdin), Readable.toWeb(agent.stdout));
+var stream = ndJsonStream2(
+  Writable.toWeb(agent.stdin),
+  Readable.toWeb(agent.stdout)
+);
 var result = await client({ name: "via" }).onRequest(methods.client.session.requestPermission, (ctx) => {
   const { toolCall, options } = ctx.params;
   if (policy === "allow") return choose(options, "allow_once");
-  if (policy === "deny" || !process.env.VIA_INBOX) return choose(options, "reject_once");
+  if (policy === "deny" || !process.env.RELAY_INBOX) return choose(options, "reject_once");
   const id = `${RUN}-${++asks}`;
   const raw = toolCall.rawInput;
   out({
-    via: "ask",
+    relay: "ask",
     id,
     title: toolCall.title ?? "",
     kind: toolCall.kind ?? "other",
@@ -9703,65 +9751,83 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
     options: options.map((o) => ({ optionId: o.optionId, name: o.name, kind: o.kind }))
   });
   return new Promise(
-    (resolve) => asked.set(id, (optionId) => resolve(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } }))
+    (resolve) => asked.set(
+      id,
+      (optionId) => resolve(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } })
+    )
   );
 }).onNotification(methods.client.session.update, (ctx) => {
   if (!busy && ctx.params.update.sessionUpdate === "agent_message_chunk") spokeIdle = true;
   out(ctx.params);
 }).connectWith(stream, async (ctx) => {
-  await ctx.request(methods.agent.initialize, {
+  const init = await ctx.request(methods.agent.initialize, {
     protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }
+    // plan: codex-acp sends plan_update only to a client that declares one (not yet in the stable schema);
+    // terminal_output_delta: command output in tool call updates, the Zed convention. No client
+    // terminal: commands stay in the agent's own sandbox.
+    clientCapabilities: {
+      fs: { readTextFile: false, writeTextFile: false },
+      terminal: false,
+      _meta: { terminal_output_delta: true },
+      ...{ plan: {} }
+    }
   });
-  const resume = process.env.VIA_SESSION;
+  const resume = process.env.RELAY_SESSION;
   const opened = resume ? await ctx.request(methods.agent.session.load, { sessionId: resume, cwd, mcpServers: [] }).catch((error2) => {
     const message = reason(error2);
     const data = JSON.stringify(error2?.data ?? "");
     if (!/not found/i.test(`${message} ${data}`)) return fail(`could not resume the session: ${message}`);
-    out({ via: "session_lost", message });
-    process.stderr.write(`via relay: session lost: ${message}
+    out({ relay: "session_lost", message });
+    process.stderr.write(`acp relay: session lost: ${message}
 `);
     return process.exit(1);
   }) : await ctx.request(methods.agent.session.new, { cwd, mcpServers: [] });
   const sessionId = resume ?? opened.sessionId;
-  out({ via: "session", sessionId });
+  out({ relay: "session", sessionId, cwd });
   cancel = async () => {
     await ctx.notify(methods.agent.session.cancel, { sessionId });
     await new Promise((resolve) => setTimeout(resolve, 500));
   };
-  const modeId = process.env.VIA_AGENT_MODE;
+  const modeId = process.env.RELAY_AGENT_MODE;
   if (modeId)
     await ctx.request(methods.agent.session.setMode, { sessionId, modeId }).catch((error2) => fail(`the agent refused mode ${modeId}: ${String(error2?.message ?? error2)}`));
   let configOptions = opened.configOptions ?? [];
-  const model = process.env.VIA_MODEL;
+  const model = process.env.RELAY_MODEL;
   if (model) {
     const set = await ctx.request(methods.agent.session.setConfigOption, { sessionId, configId: "model", value: model }).catch((error2) => fail(`the agent refused model ${model}: ${String(error2?.message ?? error2)}`));
     configOptions = set.configOptions ?? configOptions;
   }
   let extra = {};
   try {
-    extra = JSON.parse(process.env.VIA_CONFIG || "{}");
+    extra = JSON.parse(process.env.RELAY_CONFIG || "{}");
   } catch {
-    fail("VIA_CONFIG is not a JSON object");
+    fail("RELAY_CONFIG is not a JSON object");
   }
   for (const [configId, value] of Object.entries(extra)) {
-    if (typeof value !== "string") fail(`VIA_CONFIG.${configId} must be a string`);
-    const set = await ctx.request(methods.agent.session.setConfigOption, { sessionId, configId, value }).catch((error2) => fail(`the agent refused ${configId} ${String(value)}: ${String(error2?.message ?? error2)}`));
+    if (typeof value !== "string") fail(`RELAY_CONFIG.${configId} must be a string`);
+    const set = await ctx.request(methods.agent.session.setConfigOption, { sessionId, configId, value }).catch(
+      (error2) => fail(`the agent refused ${configId} ${String(value)}: ${String(error2?.message ?? error2)}`)
+    );
     configOptions = set.configOptions ?? configOptions;
   }
   const current = configOptions.find((o) => o.id === "model");
-  if (current && "currentValue" in current && typeof current.currentValue === "string") out({ via: "model", name: current.currentValue });
+  if (current && "currentValue" in current && typeof current.currentValue === "string")
+    out({ relay: "model", name: current.currentValue });
   const queue = [prompt];
   let interrupt;
   let last;
   const promptDone = (r) => (
     // Not in the stable type, but codex-acp and opencode send it.
-    out({ via: "prompt_done", stopReason: r.stopReason, usage: r.usage ?? null })
+    out({ relay: "prompt_done", stopReason: r.stopReason, usage: r.usage ?? null })
   );
   const steering = /* @__PURE__ */ new Set();
-  const prompted = (text) => ({ sessionId, prompt: [{ type: "text", text }] });
+  const images = init.agentCapabilities?.promptCapabilities?.image === true;
+  const prompted = (text) => ({
+    sessionId,
+    prompt: [{ type: "text", text }, ...images ? attached(text) : []]
+  });
   const refused = (text, error2) => {
-    process.stderr.write(`via relay: steer refused, queued: ${reason(error2)}
+    process.stderr.write(`acp relay: steer refused, queued: ${reason(error2)}
 `);
     queue.push(text);
   };
@@ -9770,7 +9836,7 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
     if (!busy || interrupt !== void 0) return void queue.push(text);
     const r = await ctx.request("_session/steering", prompted(text)).catch((error2) => refused(text, error2));
     if (r === void 0) return;
-    if (r.outcome === "injected") return void out({ via: "steered" });
+    if (r.outcome === "injected") return void out({ relay: "steered" });
     if (r.outcome === "startedNewTurn") await ctx.notify(methods.agent.session.cancel, { sessionId }).catch(() => {
     });
     queue.push(text);
@@ -9778,20 +9844,20 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
   const steerOpencode = async (text) => {
     const r = await ctx.request(methods.agent.session.prompt, prompted(text)).catch((error2) => refused(text, error2));
     if (r === void 0 || r.stopReason === "cancelled") return;
-    out({ via: "steered" });
+    out({ relay: "steered" });
     if (spokeIdle) {
       last = r;
       promptDone(r);
     }
   };
   const steer = (text) => {
-    const done = (process.env.VIA_STEER === "steering" ? steerCodex(text) : steerOpencode(text)).finally(
+    const done = (process.env.RELAY_STEER === "steering" ? steerCodex(text) : steerOpencode(text)).finally(
       () => steering.delete(done)
     );
     steering.add(done);
   };
   let offset = 0;
-  const inbox = process.env.VIA_INBOX;
+  const inbox = process.env.RELAY_INBOX;
   if (inbox)
     setInterval(() => {
       if (!existsSync(inbox)) return;
@@ -9802,7 +9868,7 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
         if (!line.trim()) continue;
         const value = JSON.parse(line);
         if (typeof value === "string") {
-          if (busy && interrupt === void 0 && process.env.VIA_STEER) steer(value);
+          if (busy && interrupt === void 0 && process.env.RELAY_STEER) steer(value);
           else queue.push(value);
         } else if (typeof value === "object" && value !== null && "answer" in value) {
           const { answer, optionId } = value;
@@ -9813,7 +9879,10 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
           interrupt = interrupt === void 0 ? text2 : `${interrupt}
 
 ${text2}`;
-          for (const [id, answerIt] of asked) answerIt(null), asked.delete(id);
+          for (const [id, answerIt] of asked) {
+            answerIt(null);
+            asked.delete(id);
+          }
           void ctx.notify(methods.agent.session.cancel, { sessionId });
         }
       }
@@ -9825,7 +9894,7 @@ ${text2}`;
       continue;
     }
     const text = queue.shift();
-    out({ via: "steered" });
+    out({ relay: "steered" });
     busy = true;
     spokeIdle = false;
     const r = await ctx.request(methods.agent.session.prompt, prompted(text)).catch((error2) => fail(reason(error2)));
@@ -9833,14 +9902,14 @@ ${text2}`;
     last = r;
     promptDone(r);
     if (interrupt !== void 0) {
-      out({ via: "interrupted" });
+      out({ relay: "interrupted" });
       queue.unshift(interrupt);
       interrupt = void 0;
     }
   }
   return last;
 });
-out({ via: "done", stopReason: result?.stopReason ?? null });
+out({ relay: "done", stopReason: result?.stopReason ?? null });
 cancel = async () => {
 };
 await stop(0);

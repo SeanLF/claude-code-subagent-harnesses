@@ -1,0 +1,141 @@
+import type { TurnStepChunk, TurnStepResult, TurnUsage } from 'claude-code'
+import { NO_OUTPUT } from './render'
+
+// One step per harness tool call. A run outlives the step that started it: each tool call the
+// harness reports ends a step with a call to the plugin's own tool, whose tool.call hook (answerCall)
+// reads the run on until the harness reports that call done, and the next step (pump) reads on
+// from there. The tool runs nothing: a call to it nobody answers fails, where a Bash call whose hook
+// failed would run the real command.
+
+// A harness tool call starting or ending, for pump to make a call to the plugin's tool of; never reaches the engine.
+// usage: the run's last model call, for the step that ends with the call.
+export type Mark =
+  | { kind: 'call-start'; id: string; input: { kind: string; title: string; path?: string }; usage: TurnUsage | null }
+  | { kind: 'call-end'; id: string; output: string; failed: boolean }
+// A harness run that outlives its step: steps and the tool's tool.call hook take turns reading it.
+// held: what a tool.call hook read past its call, for the next step; outputs: finished calls by the
+// harness's id; final: the run's last step, once it ended.
+export type Job = {
+  turnId: string
+  gen: AsyncGenerator<TurnStepChunk | Mark, TurnStepResult>
+  held: (TurnStepChunk | Mark)[]
+  outputs: Map<string, { output: string; failed: boolean }>
+  final?: TurnStepResult
+  abort: AbortController
+  count: number
+}
+
+// The plugin's tool, by its registered name, and the runs and calls in flight.
+export type Steps = {
+  tool: string
+  jobs: Map<string, Job> // by agent id
+  calls: Map<string, { agentId: string; id: string }> // by tool_use_id: the harness's own call id
+}
+
+// Stops a run no step will read again: a new turn, or the turn's end.
+export function endJob(w: Steps, agentId: string): void {
+  const job = w.jobs.get(agentId)
+  if (job === undefined) return
+  w.jobs.delete(agentId)
+  for (const [id, call] of w.calls) if (call.agentId === agentId) w.calls.delete(id)
+  job.abort.abort()
+  void job.gen.return(undefined as never).catch(() => {})
+}
+
+// The reading hook's abort (Esc) stops the run.
+function lend(job: Job, signal: AbortSignal): () => void {
+  const forward = () => job.abort.abort()
+  if (signal.aborted) forward()
+  signal.addEventListener('abort', forward, { once: true })
+  return () => signal.removeEventListener('abort', forward)
+}
+
+export async function* pump(
+  w: Steps,
+  job: Job,
+  e: { turnId: string; index: number; agentId?: string },
+  signal: AbortSignal,
+): AsyncGenerator<TurnStepChunk, TurnStepResult> {
+  const unlend = lend(job, signal)
+  // Block indexes start again at each step.
+  const blocks = new Map<number, number>()
+  const block = (index: number) => {
+    if (!blocks.has(index)) blocks.set(index, blocks.size)
+    return blocks.get(index) as number
+  }
+  try {
+    for (;;) {
+      let c: TurnStepChunk | Mark
+      const heldChunk = job.held.shift()
+      if (heldChunk !== undefined) c = heldChunk
+      else if (job.final !== undefined) {
+        w.jobs.delete(e.agentId ?? '')
+        return { ...job.final, turnId: e.turnId, index: e.index }
+      } else {
+        const r = await job.gen.next()
+        if (r.done) {
+          job.final = r.value
+          continue
+        }
+        c = r.value
+      }
+      if (c.kind === 'call-end') {
+        job.outputs.set(c.id, { output: c.output, failed: c.failed })
+        continue
+      }
+      if (c.kind === 'call-start') {
+        job.count += 1
+        const id = `toolu_step_${e.turnId.replace(/[^A-Za-z0-9_]/g, '_')}_${job.count}`
+        w.calls.set(id, { agentId: e.agentId ?? '', id: c.id })
+        const index = block(-1 - job.count)
+        yield { kind: 'tool', index, id, name: w.tool }
+        yield { kind: 'input', index, json: JSON.stringify(c.input) }
+        yield { kind: 'stop', stopReason: 'tool_use', usage: c.usage }
+        return {
+          turnId: e.turnId,
+          index: e.index,
+          answer: '',
+          toolUses: [{ name: w.tool, input: c.input }],
+          stopReason: 'tool_use',
+          usage: c.usage,
+        }
+      }
+      yield 'index' in c ? { ...c, index: block(c.index) } : c
+    }
+  } finally {
+    unlend()
+  }
+}
+
+// The tool.call hook on the plugin's tool: reads the run on until the harness finishes this call, keeping
+// whatever else it says for the next step. Never runs anything itself.
+export async function answerCall(
+  w: Steps,
+  toolUseId: string | undefined,
+  signal: AbortSignal,
+): Promise<{ result: string; isError?: true } | { deny: string }> {
+  const ref = toolUseId === undefined ? undefined : w.calls.get(toolUseId)
+  const job = ref === undefined ? undefined : w.jobs.get(ref.agentId)
+  if (ref === undefined || job === undefined)
+    return { deny: 'This tool only reports a tool call an agent harness made; it does nothing when called.' }
+  const unlend = lend(job, signal)
+  try {
+    for (;;) {
+      const done = job.outputs.get(ref.id)
+      if (done !== undefined) {
+        w.calls.delete(toolUseId as string)
+        return done.failed ? { result: done.output || 'failed', isError: true } : { result: done.output || NO_OUTPUT }
+      }
+      if (job.final !== undefined || job.abort.signal.aborted) return { result: 'The harness run ended before this call finished.' }
+      const r = await job.gen.next()
+      if (r.done) {
+        job.final = r.value
+        continue
+      }
+      if (r.value.kind === 'call-end') job.outputs.set(r.value.id, { output: r.value.output, failed: r.value.failed })
+      else job.held.push(r.value)
+    }
+  } finally {
+    unlend()
+  }
+}

@@ -7,7 +7,8 @@ import { pi } from '../hooks/adapters/pi'
 import { descriptionOf, helpOf, promptOf } from '../hooks/prompt'
 
 const HELP = helpOf(pi)
-import { arrange, expectPiSpawn, lines, ROOT, run, split, STEP, STUB, type Spawn } from './helpers'
+
+import { arrange, expectPiSpawn, lines, ROOT, run, type Spawn, STEP, STUB, split } from './helpers'
 
 test('pi-model and pi-tools lines are both passed and stripped from the prompt', async ($, on) => {
   const spawns: Spawn[] = []
@@ -239,7 +240,6 @@ test('help and description say every ACP harness steers mid-run and takes interr
     expect(descriptionOf(adapter)).toContain('steers it mid-run')
   }
 })
-
 
 test('only a harness that steers tells Claude about interrupt:', () => {
   expect(descriptionOf(pi)).toContain('`interrupt:`')

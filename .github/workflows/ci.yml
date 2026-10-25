@@ -36,11 +36,14 @@ jobs:
         run: claude plugin validate --strict . < /dev/null
       # relay/relay.mjs is the committed bundle the plugin runs, so a change to its source or to the
       # bundled SDK must come with a rebuilt bundle.
-      - name: The relay bundle matches its source
+      # Biome formats and lints, and keeps hooks/acp, the generic ACP client, from importing via's own code.
+      - name: Lint, and the relay bundle matches its source
         run: |
           npx -y pnpm@12.15.0 install --frozen-lockfile
+          npx -y pnpm@12.15.0 lint
           npx -y pnpm@12.15.0 build:relay
           git diff --exit-code relay/relay.mjs
+          npx -y pnpm@12.15.0 test:relay
           rm -rf node_modules
       - name: Test
         run: claude plugin test . < /dev/null

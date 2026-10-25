@@ -1,36 +1,59 @@
-import type { TurnStepChunk } from 'claude-code'
-import { expect, mock, test, type TestBody } from 'claude-code/testing'
-
+import { expect, mock, type TestBody, test } from 'claude-code/testing'
+import { relayEvents } from '../../hooks/acp/events'
 import { opencode, opencodeRun } from '../../hooks/adapters/opencode'
 import { run as runHook } from '../../hooks/run'
 import type { World } from '../../hooks/world'
-import { ROOT, STEP } from '../helpers'
+import { ROOT, run, runTurn, STEP } from '../helpers'
 
 type TestOn = Parameters<TestBody>[1]
 type Spawn = { argv: string[]; input: string | undefined; env?: Record<string, string> }
 type Write = { path: string; text: string }
 
 const SID = 'ses_e91343cb9ffesi5kO9k3QFHJV4'
-const chunk = (messageId: string, text: string) => ({ sessionId: SID, update: { content: { text, type: 'text' }, messageId, sessionUpdate: 'agent_message_chunk' } })
+const chunk = (messageId: string, text: string) => ({
+  sessionId: SID,
+  update: { content: { text, type: 'text' }, messageId, sessionUpdate: 'agent_message_chunk' },
+})
 // Captured from relay/relay.mjs over `opencode acp` (opencode 1.19.4, OpenRouter DeepSeek, 2026-10-24):
 // opencode names a tool `bash` first and its command only in the update that starts it.
 const CAPTURED = [
-  { via: 'session', sessionId: SID },
-  { via: 'model', name: 'openrouter/~deepseek/deepseek-flash-latest' },
-  { via: 'steered' },
+  { relay: 'session', sessionId: SID },
+  { relay: 'model', name: 'openrouter/~deepseek/deepseek-flash-latest' },
+  { relay: 'steered' },
   chunk('msg_1', 'Running it.'),
   { sessionId: SID, update: { toolCallId: 'call_1', title: 'bash', kind: 'execute', status: 'pending', sessionUpdate: 'tool_call' } },
-  { sessionId: SID, update: { toolCallId: 'call_1', title: 'echo hi > asked.txt', kind: 'execute', status: 'in_progress', sessionUpdate: 'tool_call_update' } },
-  { sessionId: SID, update: { toolCallId: 'call_1', title: 'echo hi > asked.txt', kind: 'execute', status: 'completed', sessionUpdate: 'tool_call_update' } },
+  {
+    sessionId: SID,
+    update: {
+      toolCallId: 'call_1',
+      title: 'echo hi > asked.txt',
+      kind: 'execute',
+      status: 'in_progress',
+      sessionUpdate: 'tool_call_update',
+    },
+  },
+  {
+    sessionId: SID,
+    update: { toolCallId: 'call_1', title: 'echo hi > asked.txt', kind: 'execute', status: 'completed', sessionUpdate: 'tool_call_update' },
+  },
   chunk('msg_2', 'DONE'),
   { sessionId: SID, update: { used: 11136, size: 1048576, cost: { amount: 0.00022576, currency: 'USD' }, sessionUpdate: 'usage_update' } },
-  { via: 'prompt_done', stopReason: 'end_turn', usage: { inputTokens: 9344, outputTokens: 12, totalTokens: 11148, cachedReadTokens: 1792 } },
-  { via: 'done', stopReason: 'end_turn' },
+  {
+    relay: 'prompt_done',
+    stopReason: 'end_turn',
+    usage: { inputTokens: 9344, outputTokens: 12, totalTokens: 11148, cachedReadTokens: 1792 },
+  },
+  { relay: 'done', stopReason: 'end_turn' },
 ]
-const lines = (events: unknown[]) => events.map((e) => JSON.stringify(e)).join('\n') + '\n'
+const lines = (events: unknown[]) => `${events.map((e) => JSON.stringify(e)).join('\n')}\n`
 const AGENT = { id: 'a1', description: 'x', type: 'via:opencode', status: 'running' } as const
 
-function arrange(on: TestOn, spawns: Spawn[], out: { stdout?: string; stderr?: string; code?: number } = { stdout: lines(CAPTURED) }, o: { mode?: string; writes?: Write[] } = {}) {
+function arrange(
+  on: TestOn,
+  spawns: Spawn[],
+  out: { stdout?: string; stderr?: string; code?: number } = { stdout: lines(CAPTURED) },
+  o: { mode?: string; writes?: Write[] } = {},
+) {
   mock.clock(on)
   mock.env(on, { HOME: '/home/u' })
   on('agent.list', () => ({ value: [AGENT] }))
@@ -51,23 +74,17 @@ function arrange(on: TestOn, spawns: Spawn[], out: { stdout?: string; stderr?: s
   })
 }
 
-async function run($: Parameters<TestBody>[0], step: typeof STEP = STEP) {
-  const chunks: TurnStepChunk[] = []
-  const stream = $.turn.step(step)
-  for (;;) {
-    const next = await stream.next()
-    if (next.done) return { chunks, result: next.value }
-    chunks.push(next.value)
+const injected = (spawn: Spawn | undefined) =>
+  JSON.parse(spawn?.env?.OPENCODE_CONFIG_CONTENT ?? '{}') as {
+    lsp?: boolean
+    agent?: Record<string, { permission: Record<string, unknown> }>
   }
-}
-
-const injected = (spawn: Spawn | undefined) => JSON.parse(spawn?.env?.OPENCODE_CONFIG_CONTENT ?? '{}') as { lsp?: boolean; agent?: Record<string, { permission: Record<string, unknown> }> }
 
 test('an opencode agent runs `opencode acp` behind the relay, with its prompt on stdin', async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns)
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'run the tests' })
-  await run($)
+  await runTurn($)
   expect(spawns[0]?.argv).toEqual(['node', `${ROOT}/relay/relay.mjs`, '--', 'opencode', 'acp'])
   expect(spawns[0]?.input).toBe('run the tests')
 })
@@ -76,22 +93,25 @@ test('only the last message is the answer, signed with the session model; a tool
   const spawns: Spawn[] = []
   arrange(on, spawns)
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
-  const { chunks, result } = await run($)
+  const { chunks, result, calls } = await runTurn($)
   expect(result.answer).toBe('DONE\n\n— answered by opencode, openrouter/~deepseek/deepseek-flash-latest')
   expect(result.usage?.input_tokens).toBe(11136)
-  const tools = chunks.filter((c) => c.kind === 'text' && c.text.includes('▸ execute'))
-  expect(tools.map((c) => (c as { text: string }).text)).toEqual(['\n▸ execute: echo hi > asked.txt\n'])
+  // The command is one call to via's tool, named once, and answered with what opencode reported.
+  const inputs = chunks.flatMap((c) => (c.kind === 'input' ? [JSON.parse(c.json) as unknown] : []))
+  expect(inputs).toEqual([{ kind: 'execute', title: 'echo hi > asked.txt' }])
+  expect(calls).toHaveLength(1)
+  expect(chunks.some((c) => c.kind === 'text' && c.text.includes('echo hi'))).toBe(false)
 })
 
 test("outside read-only via injects no agent: opencode runs with the person's own permissions, and its questions reach them", async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns)
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
-  await run($)
+  await runTurn($)
   expect(spawns[0]?.env?.OPENCODE_CONFIG_CONTENT).toBeUndefined()
   expect(spawns[0]?.env?.OPENCODE_DISABLE_PROJECT_CONFIG).toBeUndefined()
-  expect(spawns[0]?.env?.VIA_POLICY).toBe('ask')
-  expect(spawns[0]?.env?.VIA_STEER).toBe('prompt')
+  expect(spawns[0]?.env?.RELAY_POLICY).toBe('ask')
+  expect(spawns[0]?.env?.RELAY_STEER).toBe('prompt')
 })
 
 test("only read-only injects an agent; otherwise the permission mode decides how opencode's own questions are answered", () => {
@@ -109,7 +129,7 @@ test('tools: read runs a deny-by-default agent with no project config, no LSP, n
   arrange(on, spawns)
   tree(on, () => undefined)
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'tools: read\nlook' })
-  await run($)
+  await runTurn($)
   const config = injected(spawns[0])
   const permission = config.agent?.['via-read-a1']?.permission ?? {}
   expect(config.lsp).toBe(false)
@@ -117,37 +137,45 @@ test('tools: read runs a deny-by-default agent with no project config, no LSP, n
   expect(permission.bash).toBeUndefined()
   expect(permission.webfetch).toBeUndefined()
   expect(permission.read).toEqual({ '*': 'allow', '*.env': 'deny', '*.env.*': 'deny', '*.env.example': 'allow' })
-  expect(spawns[0]?.env).toMatchObject({ OPENCODE_DISABLE_PROJECT_CONFIG: '1', VIA_POLICY: 'deny', VIA_CONFIG: JSON.stringify({ mode: 'via-read-a1' }) })
+  expect(spawns[0]?.env).toMatchObject({
+    OPENCODE_DISABLE_PROJECT_CONFIG: '1',
+    RELAY_POLICY: 'deny',
+    RELAY_CONFIG: JSON.stringify({ mode: 'via-read-a1' }),
+  })
 })
 
 test("a bypass-mode run injects nothing, so the person's own opencode setup applies", async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns, undefined, { mode: 'bypassPermissions' })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
-  await run($)
+  await runTurn($)
   expect(spawns[0]?.env?.OPENCODE_CONFIG_CONTENT).toBeUndefined()
-  expect(spawns[0]?.env?.VIA_CONFIG).toBeUndefined()
-  expect(spawns[0]?.env?.VIA_POLICY).toBe('allow')
+  expect(spawns[0]?.env?.RELAY_CONFIG).toBeUndefined()
+  expect(spawns[0]?.env?.RELAY_POLICY).toBe('allow')
 })
 
 test("a thinking line becomes opencode's effort config option", async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns)
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'thinking: high\ngo' })
-  await run($)
-  expect(JSON.parse(spawns[0]?.env?.VIA_CONFIG ?? '{}')).toEqual({ effort: 'high' })
+  await runTurn($)
+  expect(JSON.parse(spawns[0]?.env?.RELAY_CONFIG ?? '{}')).toEqual({ effort: 'high' })
 })
 
 test('a lost session fails in plain words and is forgotten', async ($, on) => {
   const spawns: Spawn[] = []
   const saved: unknown[] = []
-  arrange(on, spawns, { stdout: lines([{ via: 'session_lost', message: 'Session not found' }]), stderr: 'via relay: session lost: Session not found\n', code: 1 })
+  arrange(on, spawns, {
+    stdout: lines([{ relay: 'session_lost', message: 'Session not found' }]),
+    stderr: 'acp relay: session lost: Session not found\n',
+    code: 1,
+  })
   on('state.set', (_, e, next) => {
     if (e.key === 'sessions') saved.push(e.value)
     return next(e)
   })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
-  const { result } = await run($)
+  const { result } = await runTurn($)
   expect(result.answer).toContain("opencode could not find this agent's earlier session")
   expect(saved).toEqual([''])
 })
@@ -169,6 +197,9 @@ test('an aborted run saves a session id in an unterminated tail without showing 
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
+    tool: 'mcp__via__step',
+    jobs: new Map(),
+    calls: new Map(),
   }
   const stop = new AbortController()
   let read!: () => void
@@ -176,7 +207,10 @@ test('an aborted run saves a session id in an unterminated tail without showing 
     read = resolve
   })
   const child = async function* () {
-    yield { stream: 'stdout' as const, text: `${JSON.stringify({ via: 'steered' })}\n${JSON.stringify(chunk('m', 'trailing text'))}\n${JSON.stringify({ via: 'session', sessionId: SID })}` }
+    yield {
+      stream: 'stdout' as const,
+      text: `${JSON.stringify({ relay: 'steered' })}\n${JSON.stringify(chunk('m', 'trailing text'))}\n${JSON.stringify({ relay: 'session', sessionId: SID })}`,
+    }
     read()
     await new Promise<void>((resolve) => stop.signal.addEventListener('abort', () => resolve(), { once: true }))
     return { code: 0, signal: null }
@@ -188,7 +222,7 @@ test('an aborted run saves a session id in an unterminated tail without showing 
     process: { spawn: child },
     plugin: { root: '/' },
   } as unknown as Parameters<typeof runHook>[2]
-  const stream = runHook(world, opencode, $, { turnId: 't1', index: 0 }, {
+  const stream = runHook(world, opencode, $, {
     agentId: 'a1',
     choice: {},
     prompt: 'long job',
@@ -218,7 +252,9 @@ function tree(on: TestOn, at: (cwd: string) => { path: string; holds: string[] }
     if (e.path.endsWith('/.opencode') && e.path !== at(cwd)?.path) throw new Error('ENOENT')
     return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: e.path } }
   })
-  on('fs.list', (_, e) => ({ value: (at(cwd ?? '')?.holds ?? []).map((name) => ({ name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false })) }))
+  on('fs.list', () => ({
+    value: (at(cwd ?? '')?.holds ?? []).map((name) => ({ name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false })),
+  }))
 }
 const parent = (path: string) => path.replace(/\/[^/]+$/, '') || '/'
 
@@ -227,7 +263,7 @@ test('tools: read is refused under a .opencode folder, which opencode runs code 
   arrange(on, spawns)
   tree(on, (cwd) => ({ path: `${parent(cwd)}/.opencode`, holds: ['agents', 'opencode.json'] }))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'tools: read\nlook around' })
-  const { result } = await run($)
+  const { result } = await runTurn($)
   expect(spawns).toHaveLength(0)
   expect(result.answer).toContain('opencode cannot run read-only here')
   expect(result.answer).toContain('/.opencode)')
@@ -238,7 +274,7 @@ test('plan mode is refused under a .opencode folder too', async ($, on) => {
   arrange(on, spawns, undefined, { mode: 'plan' })
   tree(on, (cwd) => ({ path: `${parent(cwd)}/.opencode`, holds: ['plugins'] }))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'look around' })
-  const { result } = await run($)
+  const { result } = await runTurn($)
   expect(spawns).toHaveLength(0)
   expect(result.answer).toContain('opencode cannot run read-only here')
 })
@@ -248,8 +284,8 @@ test('~/.opencode as the installer and opencode leave it (bin, .gitignore) does 
   arrange(on, spawns)
   tree(on, (cwd) => ({ path: `${parent(cwd)}/.opencode`, holds: ['bin', '.gitignore'] }))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'tools: read\nlook around' })
-  await run($)
-  expect(spawns[0]?.env?.VIA_CONFIG).toBe(JSON.stringify({ mode: 'via-read-a1' }))
+  await runTurn($)
+  expect(spawns[0]?.env?.RELAY_CONFIG).toBe(JSON.stringify({ mode: 'via-read-a1' }))
 })
 
 test('a walk that cannot finish, as when a hook withholds realPath, refuses read-only rather than assuming it is safe', async ($, on) => {
@@ -260,7 +296,169 @@ test('a walk that cannot finish, as when a hook withholds realPath, refuses read
     return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } }
   })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'tools: read\nlook around' })
-  const { result } = await run($)
+  const { result } = await runTurn($)
   expect(spawns).toHaveLength(0)
   expect(result.answer).toContain('could not all be checked for .opencode')
+})
+
+test("opencode's command ends the step with a call to via's tool, which the next tool.call answers with its output", async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const first = await run($)
+  expect(first.result.stopReason).toBe('tool_use')
+  expect(first.result.toolUses).toEqual([{ name: 'mcp__via__step', input: { kind: 'execute', title: 'echo hi > asked.txt' } }])
+  const tool = first.chunks.find((c) => c.kind === 'tool')
+  if (tool?.kind !== 'tool') throw new Error('no tool chunk')
+  // Each step numbers its blocks from 0.
+  expect(Math.min(...first.chunks.flatMap((c) => ('index' in c ? [c.index] : [])))).toBe(0)
+  const answered = await $.tool.call({
+    tool: 'mcp__via__step',
+    tool_use_id: tool.id,
+    kind: 'execute',
+    title: 'echo hi > asked.txt',
+  } as never)
+  expect(answered).not.toHaveProperty('deny')
+  const rest = await run($, { ...STEP, index: 1 })
+  expect(rest.result.answer).toBe('DONE\n\n— answered by opencode, openrouter/~deepseek/deepseek-flash-latest')
+  expect(spawns).toHaveLength(1)
+})
+
+test("a call to via's tool that no harness made is refused and runs nothing", async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns)
+  const answered = await $.tool.call({ tool: 'mcp__via__step', tool_use_id: 'toolu_made_up', kind: 'execute', title: 'rm -rf /' } as never)
+  expect(answered).toHaveProperty('deny')
+  expect(spawns).toHaveLength(0)
+})
+
+test('a finished call reports its text, a nonzero exit code, or nothing for exit code 0', () => {
+  const parse = relayEvents()
+  parse(JSON.stringify({ relay: 'steered' }))
+  const done = (id: string, extra: Record<string, unknown>) =>
+    parse(JSON.stringify({ sessionId: SID, update: { sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed', ...extra } }))
+  expect(done('a', { rawOutput: { exit_code: 0 } }).at(-1)).toEqual({ k: 'called', id: 'a', output: '', failed: false })
+  expect(done('b', { rawOutput: { exit_code: 2 } }).at(-1)).toEqual({ k: 'called', id: 'b', output: 'exit code 2', failed: false })
+  expect(done('c', { content: [{ type: 'content', content: { type: 'text', text: 'hi' } }] }).at(-1)).toEqual({
+    k: 'called',
+    id: 'c',
+    output: 'hi',
+    failed: false,
+  })
+  // Reported only once done, it is still announced first.
+  expect(done('d', { kind: 'execute', title: 'ls' })[0]).toEqual({ k: 'call', id: 'd', kind: 'execute', title: 'ls' })
+})
+
+test("a title's paths under the working folder are shown relative to it", () => {
+  const parse = relayEvents()
+  parse(JSON.stringify({ relay: 'session', sessionId: SID, cwd: '/work/repo' }))
+  parse(JSON.stringify({ relay: 'steered' }))
+  const update = {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'r',
+    status: 'in_progress',
+    kind: 'read',
+    title: "Read file '/work/repo/src/a.ts'",
+  }
+  expect(parse(JSON.stringify({ sessionId: SID, update }))).toEqual([{ k: 'call', id: 'r', kind: 'read', title: "Read file 'src/a.ts'" }])
+  // A path that only contains the folder stays whole; so does a sibling folder's.
+  const inside = { ...update, toolCallId: 'i', title: "Read file '/x/work/repo/a.ts' and '/work/repo2/b.ts'" }
+  expect(parse(JSON.stringify({ sessionId: SID, update: inside }))).toEqual([
+    { k: 'call', id: 'i', kind: 'read', title: "Read file '/x/work/repo/a.ts' and '/work/repo2/b.ts'" },
+  ])
+  // Elsewhere, a path stays whole.
+  const outside = { ...update, toolCallId: 'o', title: "Read file '/etc/hosts'" }
+  expect(parse(JSON.stringify({ sessionId: SID, update: outside }))).toEqual([
+    { k: 'call', id: 'o', kind: 'read', title: "Read file '/etc/hosts'" },
+  ])
+})
+
+test("a command's streamed output is its result, with its exit code when it failed", () => {
+  const parse = relayEvents()
+  parse(JSON.stringify({ relay: 'steered' }))
+  const update = (extra: Record<string, unknown>) =>
+    parse(JSON.stringify({ sessionId: SID, update: { sessionUpdate: 'tool_call_update', toolCallId: 'x', ...extra } }))
+  update({ status: 'in_progress', kind: 'execute', title: 'make' })
+  update({ _meta: { terminal_output_delta: { data: 'one\n', terminal_id: 'x' } } })
+  const done = update({
+    status: 'completed',
+    _meta: { terminal_output_delta: { data: 'two\n', terminal_id: 'x' }, terminal_exit: { exit_code: 2 } },
+  })
+  expect(done.at(-1)).toEqual({ k: 'called', id: 'x', output: 'one\ntwo\nexit code 2', failed: false })
+})
+
+test('an edit is reported as its changed lines, and a plan as its entries', () => {
+  const parse = relayEvents()
+  parse(JSON.stringify({ relay: 'session', sessionId: SID, cwd: '/work/repo' }))
+  parse(JSON.stringify({ relay: 'steered' }))
+  const content = [{ type: 'diff', path: '/work/repo/notes.txt', oldText: 'a\nb\nc', newText: 'a\nB\nc' }]
+  const edited = parse(
+    JSON.stringify({
+      sessionId: SID,
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'e', status: 'completed', kind: 'edit', title: 'Edit', content },
+    }),
+  )
+  expect(edited.at(-1)).toEqual({ k: 'called', id: 'e', output: 'notes.txt\n- b\n+ B', failed: false })
+  const entries = [
+    { content: 'read', status: 'completed', priority: 'medium' },
+    { content: 'fix', status: 'in_progress', priority: 'high' },
+  ]
+  expect(parse(JSON.stringify({ sessionId: SID, update: { sessionUpdate: 'plan', entries } }))).toEqual([
+    {
+      k: 'plan',
+      entries: [
+        { content: 'read', status: 'completed' },
+        { content: 'fix', status: 'in_progress' },
+      ],
+    },
+  ])
+})
+
+test("an edit's diff sent while it runs is its result when it ends, as codex-acp sends it", () => {
+  const parse = relayEvents()
+  parse(JSON.stringify({ relay: 'steered' }))
+  const content = [{ type: 'diff', path: 'notes.txt', oldText: 'a', newText: 'A' }]
+  parse(
+    JSON.stringify({
+      sessionId: SID,
+      update: { sessionUpdate: 'tool_call', toolCallId: 'p', status: 'in_progress', kind: 'edit', title: 'Editing files', content },
+    }),
+  )
+  const done = parse(
+    JSON.stringify({ sessionId: SID, update: { sessionUpdate: 'tool_call_update', toolCallId: 'p', status: 'completed' } }),
+  )
+  expect(done.at(-1)).toEqual({ k: 'called', id: 'p', output: 'notes.txt\n- a\n+ A', failed: false })
+})
+
+test('a failed command keeps its output, the end of a long one, and its exit code from either report', () => {
+  const parse = relayEvents()
+  parse(JSON.stringify({ relay: 'steered' }))
+  const update = (id: string, extra: Record<string, unknown>) =>
+    parse(JSON.stringify({ sessionId: SID, update: { sessionUpdate: 'tool_call_update', toolCallId: id, ...extra } }))
+  update('f', { status: 'in_progress', kind: 'execute', title: 'make' })
+  update('f', { _meta: { terminal_output_delta: { data: 'boom\n', terminal_id: 'f' } } })
+  expect(update('f', { status: 'failed', rawOutput: { exit_code: 2 } }).at(-1)).toEqual({
+    k: 'called',
+    id: 'f',
+    output: 'boom\nexit code 2',
+    failed: true,
+  })
+  update('l', { status: 'in_progress', kind: 'execute', title: 'yes' })
+  update('l', { _meta: { terminal_output_delta: { data: `${'x'.repeat(3000)}END`, terminal_id: 'l' } } })
+  const long = update('l', { status: 'completed', rawOutput: { exit_code: 0 } }).at(-1) as { output: string }
+  expect(long.output.endsWith('END')).toBe(true)
+  expect(long.output.length).toBeLessThanOrEqual(2001)
+})
+
+test('a diff to or from an empty file has no blank changed line', () => {
+  const parse = relayEvents()
+  parse(JSON.stringify({ relay: 'steered' }))
+  const content = [{ type: 'diff', path: 'gone.txt', oldText: 'a', newText: '' }]
+  const done = parse(
+    JSON.stringify({
+      sessionId: SID,
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'd', status: 'completed', kind: 'delete', title: 'Delete', content },
+    }),
+  )
+  expect(done.at(-1)).toEqual({ k: 'called', id: 'd', output: 'gone.txt\n- a', failed: false })
 })

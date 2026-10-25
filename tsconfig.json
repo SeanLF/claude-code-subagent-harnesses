@@ -1,11 +1,14 @@
 {
+  "//": "The hooks run in Claude Code's engine: no DOM, no Node.",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "es2023", "lib": ["es2023"], "types": [],
-    "module": "esnext", "moduleResolution": "bundler",
-    "strict": true, "noUncheckedIndexedAccess": true,
-    "noEmit": true, "skipLibCheck": true,
-    "verbatimModuleSyntax": true, "erasableSyntaxOnly": true,
-    "jsx": "react", "jsxFactory": "h", "jsxFragmentFactory": "Fragment"
+    "lib": ["es2023"],
+    "types": [],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react",
+    "jsxFactory": "h",
+    "jsxFragmentFactory": "Fragment"
   },
   "include": [".claude-plugin/types", "hooks", "types", "tests"]
 }

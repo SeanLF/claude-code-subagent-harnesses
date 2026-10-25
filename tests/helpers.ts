@@ -6,7 +6,16 @@ type TestOn = Parameters<TestBody>[1]
 
 export const STEP = { turnId: 't1', index: 0, model: 'haiku', messageCount: 1, agentId: 'a1' }
 export const ROOT = new URL('..', (import.meta as ImportMeta & { url: string }).url).pathname.replace(/\/$/, '')
-export const STUB = { name: 'stub', bin: 'stub', about: 'stub CLI agent.', modelExample: 'm', readOnly: 'none', thinking: ['low', 'high'], steer: false, defaultModel: false } as const
+export const STUB = {
+  name: 'stub',
+  bin: 'stub',
+  about: 'stub CLI agent.',
+  modelExample: 'm',
+  readOnly: 'none',
+  thinking: ['low', 'high'],
+  steer: false,
+  defaultModel: false,
+} as const
 export type Spawn = { argv: string[]; input: string | undefined; env?: Record<string, string> }
 export type Write = { path: string; text: string }
 const AGENT = { id: 'a1', description: 'x', type: 'via:pi', status: 'running' } as const
@@ -25,6 +34,23 @@ export async function run($: TestDollar, step: typeof STEP = STEP) {
     const step = await stream.next()
     if (step.done) return { chunks, result: step.value }
     chunks.push(step.value)
+  }
+}
+
+// Runs a turn to its end as the engine would: each step that ends with a call to via's tool gets the
+// call answered through tool.call, then the next step. calls: what each answer said.
+export async function runTurn($: TestDollar, step: typeof STEP = STEP) {
+  const chunks: TurnStepChunk[] = []
+  const calls: unknown[] = []
+  for (let index = step.index; ; index += 1) {
+    const done = await run($, { ...step, index })
+    chunks.push(...done.chunks)
+    const tool = done.chunks.find((c) => c.kind === 'tool')
+    if (done.result.stopReason !== 'tool_use' || tool?.kind !== 'tool' || tool.name !== 'mcp__via__step')
+      return { chunks, result: done.result, calls }
+    const input = done.chunks.find((c) => c.kind === 'input')
+    const args = input?.kind === 'input' ? (JSON.parse(input.json) as Record<string, unknown>) : {}
+    calls.push(await $.tool.call({ tool: tool.name, tool_use_id: tool.id, ...args } as never))
   }
 }
 
@@ -64,8 +90,11 @@ export function arrange(
   })
 }
 
-export const split = (text: string) => [{ stream: 'stdout' as const, text: text.slice(0, 40) }, { stream: 'stdout' as const, text: text.slice(40) }]
-export const lines = EVENTS.map((e) => JSON.stringify(e)).join('\n') + '\n'
+export const split = (text: string) => [
+  { stream: 'stdout' as const, text: text.slice(0, 40) },
+  { stream: 'stdout' as const, text: text.slice(40) },
+]
+export const lines = `${EVENTS.map((e) => JSON.stringify(e)).join('\n')}\n`
 
 const HALF = [
   { type: 'message_start', message: { role: 'assistant', provider: 'openrouter', model: 'kimi' } },
@@ -77,7 +106,7 @@ export function hang(on: TestOn, spawns: Spawn[], writes?: Write[], env: Record<
   on('session.messages', () => ({ value: [] }))
   on('process.spawn', async function* (_, e, next) {
     spawns.push({ argv: [...e.argv], input: e.input, env: e.env })
-    yield { stream: 'stdout' as const, text: events.map((event) => JSON.stringify(event)).join('\n') + '\n' }
+    yield { stream: 'stdout' as const, text: `${events.map((event) => JSON.stringify(event)).join('\n')}\n` }
     await new Promise<void>((resolve) => {
       if (next.signal.aborted) resolve()
       else next.signal.addEventListener('abort', () => resolve(), { once: true })
@@ -95,9 +124,9 @@ export function hold(on: TestOn, spawns: Spawn[], writes: Write[], before: unkno
   })
   on('process.spawn', async function* (_, e) {
     spawns.push({ argv: [...e.argv], input: e.input, env: e.env })
-    yield { stream: 'stdout' as const, text: before.map((event) => JSON.stringify(event)).join('\n') + '\n' }
+    yield { stream: 'stdout' as const, text: `${before.map((event) => JSON.stringify(event)).join('\n')}\n` }
     await released
-    yield { stream: 'stdout' as const, text: after.map((event) => JSON.stringify(event)).join('\n') + '\n' }
+    yield { stream: 'stdout' as const, text: `${after.map((event) => JSON.stringify(event)).join('\n')}\n` }
     return { value: { code: 0, signal: null } }
   })
   return { release }

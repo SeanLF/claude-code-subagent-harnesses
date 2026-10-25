@@ -1,11 +1,9 @@
 {
+  "//": "The relay runs under Node, bundled by esbuild.",
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "target": "es2023",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
     "types": ["node"]
   },
   "include": ["src"]

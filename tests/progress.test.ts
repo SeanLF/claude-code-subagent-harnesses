@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-
+import { drawCall, NO_OUTPUT } from '../hooks/acp/render'
 import { pi } from '../hooks/adapters/pi'
 import { stepOf } from '../hooks/progress'
 import { run as runHook } from '../hooks/run'
@@ -26,7 +26,7 @@ async function spawn($: Parameters<typeof run>[0], description: string) {
   })
 }
 
-test("a running via agent writes its latest step to its agent-panel row", async ($, on) => {
+test('a running via agent writes its latest step to its agent-panel row', async ($, on) => {
   const clock = mock.clock(on)
   const spawns: Spawn[] = []
   const writes: Write[] = []
@@ -115,6 +115,9 @@ test('an aborted run clears its agent-panel row', async () => {
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
+    tool: 'mcp__via__step',
+    jobs: new Map(),
+    calls: new Map(),
   }
   const $ = {
     env: { get: async (name: string) => (name === 'HOME' ? '/home/u' : undefined) },
@@ -127,7 +130,7 @@ test('an aborted run clears its agent-panel row', async () => {
     clock: { after: () => ({ cancel: () => {} }) },
     process: {
       spawn: async function* () {
-        yield { stream: 'stdout' as const, text: [START, TOOL].map((event) => JSON.stringify(event)).join('\n') + '\n' }
+        yield { stream: 'stdout' as const, text: `${[START, TOOL].map((event) => JSON.stringify(event)).join('\n')}\n` }
         await new Promise<void>((resolve) => {
           if (stop.signal.aborted) resolve()
           else stop.signal.addEventListener('abort', () => resolve(), { once: true })
@@ -137,8 +140,17 @@ test('an aborted run clears its agent-panel row', async () => {
     },
     plugin: { root: '/' },
   } as unknown as Parameters<typeof runHook>[2]
-  const input = { agentId: 'a1', choice: {}, prompt: 'go', signal: stop.signal, inbox: undefined, session: undefined, guard: undefined, mode: 'default' as const }
-  const stream = runHook(world, pi, $, { turnId: 't1', index: 0 }, { ...input, probe: async () => undefined, save: async () => {} })
+  const input = {
+    agentId: 'a1',
+    choice: {},
+    prompt: 'go',
+    signal: stop.signal,
+    inbox: undefined,
+    session: undefined,
+    guard: undefined,
+    mode: 'default' as const,
+  }
+  const stream = runHook(world, pi, $, { ...input, probe: async () => undefined, save: async () => {} })
   const pending = (async () => {
     for (;;) if ((await stream.next()).done) return
   })()
@@ -194,4 +206,75 @@ test('with no home folder no agent-panel row is written', async ($, on) => {
 
 test('a step drops control characters, so a harness tool name cannot send escape sequences to the terminal', () => {
   expect(stepOf('\n▸ evil\u001b[2J\u001b]0;pwned\u0007: {"a":1}\n')).toBe('evil[2J]0;pwned: {"a":1}')
+})
+
+const call = (over: Partial<Parameters<typeof drawCall>[0]>): Parameters<typeof drawCall>[0] => ({
+  tool_use_id: 't',
+  tool: 'mcp__via__step',
+  input: { kind: 'execute', title: 'npm test' },
+  isRunning: false,
+  isErrored: false,
+  isInterrupted: false,
+  ...over,
+})
+const texts = (node: unknown): string[] =>
+  typeof node === 'string'
+    ? [node]
+    : typeof node === 'object' && node !== null && 'children' in node
+      ? ((node as { children?: unknown[] }).children ?? []).flatMap(texts)
+      : []
+
+test("a harness command's row says it runs, then ran; any other call shows its own title", () => {
+  expect(texts(drawCall(call({ isRunning: true }))).join('')).toBe('Running npm test')
+  expect(texts(drawCall(call({ output: 'ok' }))).join('|')).toBe('Ran| |npm test|  ⎿  ok')
+  expect(texts(drawCall(call({ input: { kind: 'read', title: "Read file 'src/a.ts'" } }))).join('')).toBe("Read file 'src/a.ts'")
+  expect(texts(drawCall(call({ input: { kind: 'read', title: 'List files' }, isRunning: true }))).join('')).toBe('List files…')
+  expect(texts(drawCall(call({ isErrored: true }))).join('')).toBe('Failed npm test')
+  // A call that reported nothing shows no output line.
+  expect(texts(drawCall(call({ output: NO_OUTPUT }))).join('|')).toBe('Ran| |npm test')
+})
+
+test("a harness call's row shows three lines of output unless expanded, and no control characters", () => {
+  const output = 'a\nb\nc\nd\ne'
+  expect(texts(drawCall(call({ output }))).join('|')).toBe('Ran| |npm test|  ⎿  a|     b|     c|     … 2 more lines (ctrl+o to expand)')
+  expect(texts(drawCall(call({ output, isExpanded: true }))).length).toBe(8)
+  expect(texts(drawCall(call({ input: { kind: 'execute', title: 'rm\u001b[2J -rf' } }))).join('')).toBe('Ran rm[2J -rf')
+  // Nor bidirectional, zero-width or tag characters, which could make a row read as another command.
+  expect(
+    texts(drawCall(call({ input: { kind: 'execute', title: 'ls \u202egnp.exe\u200b\u{e0041}' }, output: 'ok\u2066' }))).join('|'),
+  ).toBe('Ran| |ls gnp.exe|  ⎿  ok')
+})
+
+test("an edit's row colours the lines it took out and put in, and shows more of them before folding", () => {
+  const row = drawCall(call({ input: { kind: 'edit', title: 'Edit notes.txt' }, output: 'notes.txt\n- a\n+ A' }))
+  const found = (node: unknown, color: string): string[] =>
+    typeof node === 'object' && node !== null
+      ? [
+          ...((node as { props?: { color?: string } }).props?.color === color ? texts(node) : []),
+          ...((node as { children?: unknown[] }).children ?? []).flatMap((child) => found(child, color)),
+        ]
+      : []
+  expect(found(row, 'diffRemoved')).toEqual(['- a'])
+  expect(found(row, 'diffAdded')).toEqual(['+ A'])
+  const long = Array.from({ length: 20 }, (_, i) => `+ line ${i}`).join('\n')
+  expect(texts(drawCall(call({ input: { kind: 'edit', title: 'Edit a.ts' }, output: long }))).join('|')).toContain('… 8 more lines')
+})
+
+test("a plan's row is titled Plan and lists its entries", () => {
+  expect(texts(drawCall(call({ input: { kind: 'plan', title: 'Plan' }, output: '☑ read\n◐ fix' }))).join('|')).toBe(
+    'Plan|  ⎿  ☑ read|     ◐ fix',
+  )
+})
+
+test('a call that names a file links its title to it', () => {
+  const row = drawCall(call({ input: { kind: 'read', title: "Read file 'a.ts'", path: '/repo/a.ts' } })) as {
+    children: { children: unknown[] }[]
+  }
+  const link = JSON.stringify(row.children[0])
+  expect(link).toContain('"type":"Link"')
+  expect(link).toContain('file:///repo/a.ts')
+  const odd = JSON.stringify(drawCall(call({ input: { kind: 'read', title: 'x', path: '/my repo/#1.ts' } })))
+  expect(odd).toContain('file:///my%20repo/%231.ts')
+  expect(JSON.stringify(drawCall(call({ input: { kind: 'read', title: 'x', path: '/a/what?.ts' } })))).toContain('file:///a/what%3F.ts')
+  expect(JSON.stringify(drawCall(call({ input: { kind: 'read', title: 'x', path: 'rel/a.ts' } })))).not.toContain('Link')
 })

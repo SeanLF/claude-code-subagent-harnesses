@@ -8,7 +8,7 @@ relay = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(work, exist_ok=True)
 inbox = os.path.join(work, "inbox.jsonl")
 open(inbox, "w").close()
-env = dict(os.environ, VIA_INBOX=inbox, VIA_POLICY="ask", VIA_AGENT_MODE=mode)
+env = dict(os.environ, RELAY_INBOX=inbox, RELAY_POLICY="ask", RELAY_AGENT_MODE=mode)
 start = time.time()
 proc = subprocess.Popen(["node", relay, "--", *agent], cwd=work, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
 proc.stdin.write(prompt)
@@ -19,10 +19,10 @@ for line in proc.stdout:
         event = json.loads(line)
     except ValueError:
         continue
-    via = event.get("via")
-    if via in ("model", "error"):
-        print(f"{via}:", event.get("name") or event.get("message"))
-    if via == "ask":
+    kind = event.get("relay")
+    if kind in ("model", "error"):
+        print(f"{kind}:", event.get("name") or event.get("message"))
+    if kind == "ask":
         call = event["toolCall"]
         kinds = [o["kind"] for o in event["options"]]
         want = "allow_once" if answer == "allow" else "reject_once"
@@ -35,7 +35,7 @@ for line in proc.stdout:
         text += (update.get("content") or {}).get("text", "")
     if update.get("sessionUpdate") == "tool_call_update" and update.get("status") in ("completed", "failed"):
         print("tool", update.get("status"), repr(update.get("title")))
-    if via == "prompt_done":
+    if kind == "prompt_done":
         print("done:", event.get("stopReason"))
 proc.wait()
 print(f"answer: {text.strip()[-200:]!r} ({time.time() - start:.0f}s)")

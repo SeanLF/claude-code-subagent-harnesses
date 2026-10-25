@@ -1,11 +1,12 @@
 import type { EngineInterface, Timer, TurnStepChunk, TurnUsage } from 'claude-code'
 import type { Choice } from '../types'
-import type { Inbox } from './steer'
+import type { Mark } from './acp/steps'
 import type { Adapter, Ask, Mode } from './adapter'
-import type { World } from './world'
 import { stepOf } from './progress'
 import { finish, type Totals } from './report'
+import type { Inbox } from './steer'
 import { answerAsk, closeInbox, undeliveredSteers } from './steer'
+import type { World } from './world'
 
 const ANSI = /\u001b\[[0-9;]*m/g
 export const notActive = (name: string) =>
@@ -30,13 +31,14 @@ export type RunInput = {
   save(session: string): Promise<void>
 }
 
+const PLAN_MARKS: Record<string, string> = { pending: '☐', in_progress: '◐', completed: '☑' }
+
 export async function* run(
   w: World,
   adapter: Adapter,
   $: Pick<EngineInterface, 'process' | 'clock' | 'plugin' | 'fs' | 'env' | 'ui'>,
-  e: { turnId: string; index: number },
   { agentId, choice, prompt, signal, inbox, session, block = 0, guard, mode, installed, probe, save }: RunInput,
-): AsyncGenerator<TurnStepChunk, RunResult> {
+): AsyncGenerator<TurnStepChunk | Mark, RunResult> {
   const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
   const row = async (text: string) => {
     if (!home) return
@@ -60,6 +62,14 @@ export async function* run(
   let steered = 0
   let touched = false
   const asks: Ask[] = []
+  // Calls announced and not yet reported done: an interrupt or the run's end closes them as failed,
+  // or their rows would stay running and via's tool.call hook would wait on them.
+  const open = new Set<string>()
+  const close = (why: string): Mark[] => {
+    const marks = [...open].map((id): Mark => ({ kind: 'call-end', id, output: why, failed: true }))
+    open.clear()
+    return marks
+  }
   const last: Totals = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }
   const push = (k: 'text' | 'thinking', text: string): TurnStepChunk => {
     if (k !== kind) {
@@ -68,8 +78,17 @@ export async function* run(
     }
     return { kind: k, index, text }
   }
-  const take = (line: string): TurnStepChunk[] => {
-    const chunks: TurnStepChunk[] = []
+  let plan = ''
+  let plans = 0
+  const usageNow = (): TurnUsage => ({
+    model: answeredBy || adapter.name,
+    input_tokens: last.input,
+    output_tokens: last.output,
+    cache_read_input_tokens: last.cacheRead,
+    cache_creation_input_tokens: last.cacheWrite,
+  })
+  const take = (line: string): (TurnStepChunk | Mark)[] => {
+    const chunks: (TurnStepChunk | Mark)[] = []
     for (const event of parse(line)) {
       switch (event.k) {
         case 'message':
@@ -98,6 +117,7 @@ export async function* run(
         case 'interrupted':
           // The harness ran the interrupt itself: nothing for the core to rerun or call undelivered.
           if (inbox) inbox.interrupt = undefined
+          chunks.push(...close('interrupted'))
           break
         case 'ask':
           asks.push(event.ask)
@@ -114,6 +134,29 @@ export async function* run(
           break
         case 'thinking':
           chunks.push(push('thinking', event.t))
+          break
+        case 'call': {
+          kind = undefined
+          open.add(event.id)
+          const input = { kind: event.kind, title: event.title, ...(event.path ? { path: event.path } : {}) }
+          chunks.push({ kind: 'call-start', id: event.id, input, usage: usageNow() })
+          break
+        }
+        case 'plan': {
+          // A row of its own, opened and closed at once, as Claude Code's own to-do list is: only on a change.
+          const listed = event.entries.map((entry) => `${PLAN_MARKS[entry.status] ?? '☐'} ${entry.content}`).join('\n')
+          if (listed === plan) break
+          plan = listed
+          kind = undefined
+          plans += 1
+          const id = `plan-${plans}`
+          chunks.push({ kind: 'call-start', id, input: { kind: 'plan', title: 'Plan' }, usage: usageNow() })
+          chunks.push({ kind: 'call-end', id, output: listed, failed: false })
+          break
+        }
+        case 'called':
+          if (!open.delete(event.id)) break
+          chunks.push({ kind: 'call-end', id: event.id, output: event.output, failed: event.failed })
           break
         case 'tool': {
           chunks.push(push('text', event.t))
@@ -185,7 +228,10 @@ export async function* run(
       else if (error) failure = `${adapter.name}'s model call failed: ${error}`
       else if (exit.code !== 0 || !report.trim()) {
         const why = stderr.replace(ANSI, '').trim() || '(no stderr)'
-        failure = exit.code !== 0 ? `${adapter.name} exited with ${exit.code ?? exit.signal}.\n${why}` : `${adapter.name} ended with no answer.\n${why}`
+        failure =
+          exit.code !== 0
+            ? `${adapter.name} exited with ${exit.code ?? exit.signal}.\n${why}`
+            : `${adapter.name} ended with no answer.\n${why}`
       }
     } else {
       const tail = take(buffer)
@@ -200,6 +246,13 @@ export async function* run(
     await row('')
     if (inbox) await closeInbox($, inbox, agentId, w.inboxes)
   }
+  yield* close(
+    stopped === 'limit'
+      ? `stopped at the ${w.timeoutMinutes}-minute limit`
+      : stopped === 'abort'
+        ? 'interrupted'
+        : 'the run ended before this call finished',
+  )
 
   if (stopped !== undefined) {
     try {
@@ -214,10 +267,29 @@ export async function* run(
   // A run that finished before the abort, or hit the time limit, keeps its answer; the interrupt is undelivered.
   if (inbox?.interrupt !== undefined && failure && stopped === undefined) {
     yield push('text', '\n▸ interrupted\n')
-    return { aborted: false, signed: '', usage: null, block: index + 1, next: [...undeliveredSteers(inbox, steered), inbox.interrupt].join('\n\n') }
+    return {
+      aborted: false,
+      signed: '',
+      usage: null,
+      block: index + 1,
+      next: [...undeliveredSteers(inbox, steered), inbox.interrupt].join('\n\n'),
+    }
   }
   if (!answeredBy && !failure) answeredBy = (await probe(latest)) ?? ''
-  const done = finish({ adapter, choice, notices, stopped, timeoutMinutes: w.timeoutMinutes, report, answeredBy, failure, steered, inbox, total: last, push })
+  const done = finish({
+    adapter,
+    choice,
+    notices,
+    stopped,
+    timeoutMinutes: w.timeoutMinutes,
+    report,
+    answeredBy,
+    failure,
+    steered,
+    inbox,
+    total: last,
+    push,
+  })
   yield* done.chunks
   return { aborted: false, signed: done.signed, usage: done.usage, block: index + 1 }
 }

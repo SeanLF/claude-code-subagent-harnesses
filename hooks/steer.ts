@@ -1,6 +1,6 @@
 import type { EngineInterface, MatchedHook } from 'claude-code'
+import { unhidden } from './acp/text'
 import type { Ask } from './adapter'
-import { stepOf } from './progress'
 import type { World } from './world'
 
 // interrupt: what an `interrupt:` message asked for; the harness aborts its step, and the core runs it next.
@@ -9,7 +9,8 @@ export type Inbox = { name: string; path: string; lines: string[]; interrupt?: s
 const INTERRUPT = /^interrupt:[ \t]*/i
 
 export const steerDelivered = (name: string) => `Delivered to the running ${name} agent; ${name} reads it at its next step.`
-export const interruptDelivered = (name: string) => `Interrupting the running ${name} agent: it stops its current step, then takes this message.`
+export const interruptDelivered = (name: string) =>
+  `Interrupting the running ${name} agent: it stops its current step, then takes this message.`
 
 export async function openInbox(
   $: Pick<EngineInterface, 'env' | 'fs'>,
@@ -22,7 +23,10 @@ export async function openInbox(
   const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
   if (!home) return undefined
   const inbox: Inbox = { name, path: `${home}/.claude/via/inbox/${name}-${agentId}.jsonl`, lines: [] }
-  const opened = await $.fs.write(inbox.path, '').then(() => true, () => false)
+  const opened = await $.fs.write(inbox.path, '').then(
+    () => true,
+    () => false,
+  )
   if (!opened) return undefined
   inboxes.set(agentId, inbox)
   return inbox
@@ -40,7 +44,9 @@ export async function closeInbox(
 
 // Steers are JSON strings; an interrupt line is an object the harness acts on, never a message it reports.
 export function undeliveredSteers(inbox: Inbox | undefined, steered: number): string[] {
-  const steers = (inbox?.lines ?? []).map((line) => JSON.parse(line) as unknown).filter((value): value is string => typeof value === 'string')
+  const steers = (inbox?.lines ?? [])
+    .map((line) => JSON.parse(line) as unknown)
+    .filter((value): value is string => typeof value === 'string')
   // The first user message the harness reports is the prompt; each later one is a steer it took.
   return steers.slice(Math.max(0, steered - 1))
 }
@@ -75,17 +81,20 @@ export async function sendMessage(w: World, $: Parameters<SendHook>[0], e: Param
 const VERB: Record<string, string> = { execute: 'run', edit: 'edit', delete: 'delete', move: 'move', fetch: 'fetch', read: 'read' }
 // The whole command, as it will run: line breaks shown, never clipped, and control, bidirectional and
 // zero-width characters dropped, so what the dialog shows cannot be disguised.
-const shown = (text: string) =>
-  text
-    .replace(/\r?\n/g, ' ⏎ ')
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufe00-\ufe0f\ufeff\u{e0000}-\u{e007f}]/gu, '')
-    .trim()
+const shown = (text: string) => unhidden(text.replace(/\r?\n/g, ' ⏎ ')).trim()
 
 // A harness waiting on the person's permission: notify them, ask in Claude Code's own dialog with the
 // harness's own option names, and write the chosen option to the inbox. A dismissed dialog, a -p run
 // (no one to ask), free text or an AFK auto-resolve is a deny. An answer that arrives after its run
 // ended writes nothing: that inbox is no longer the live one.
-export async function answerAsk($: Pick<EngineInterface, 'ui' | 'fs'>, inboxes: Map<string, Inbox>, agentId: string, inbox: Inbox | undefined, ask: Ask, name: string): Promise<void> {
+export async function answerAsk(
+  $: Pick<EngineInterface, 'ui' | 'fs'>,
+  inboxes: Map<string, Inbox>,
+  agentId: string,
+  inbox: Inbox | undefined,
+  ask: Ask,
+  name: string,
+): Promise<void> {
   if (inbox === undefined) return
   // Only this once: an "always" option can amend the harness's own rules, which outlive via's run.
   const allow = ask.options.filter((o) => o.kind === 'allow_once')

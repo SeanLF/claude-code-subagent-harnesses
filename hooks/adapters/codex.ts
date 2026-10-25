@@ -1,26 +1,46 @@
 import type { ModelReasoningEffort } from '@openai/codex-sdk'
-import type { Adapter, Mode } from '../adapter'
 import type { Choice } from '../../types'
-import { type Policy, relayArgv, relayEnv, relayEvents, sessionLost } from './acp'
+import { relayEvents, sessionLost } from '../acp/events'
+import { isRecord } from '../acp/json'
+import { type AcpMode, type AcpSpec, acpMode, acpStart } from '../acp/spec'
+import type { Adapter, Mode } from '../adapter'
 
-const THINKING = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent'] as const satisfies readonly ModelReasoningEffort[]
+const THINKING = [
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+  'persistent',
+] as const satisfies readonly ModelReasoningEffort[]
 // Fails the type check when the SDK adds an effort level this list lacks.
 export const everyEffort: [Exclude<ModelReasoningEffort, (typeof THINKING)[number]>] extends [never] ? true : never = true
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
 
 // Read-only is the one mode via defends. Otherwise codex works in its workspace sandbox and asks before
 // going past it, as codex exec did; the question reaches the person, except in bypass (approved) and
 // dontAsk (denied). Never codex-acp's own default, auto review: its reviewer approved a network
 // escalation itself, and nobody was asked (reproduced).
-export function codexMode(choice: Choice, mode: Mode): { agentMode: string; policy: Policy } {
-  if (choice.tools === 'read' || mode === 'plan') return { agentMode: 'read-only', policy: 'deny' }
-  if (mode === 'bypassPermissions') return { agentMode: 'workspace-write', policy: 'allow' }
-  if (mode === 'dontAsk') return { agentMode: 'workspace-write', policy: 'deny' }
-  return { agentMode: 'workspace-write', policy: 'ask' }
+export const CODEX: AcpSpec = {
+  name: 'codex',
+  // Replaced by the installed codex-acp at each run.
+  command: ['codex-acp'],
+  // The person's own Codex, not the copy codex-acp bundles.
+  env: { CODEX_PATH: 'codex' },
+  steer: 'steering',
+  modes: {
+    readOnly: { agentMode: 'read-only', policy: 'deny' },
+    bypassPermissions: { agentMode: 'workspace-write', policy: 'allow' },
+    dontAsk: { agentMode: 'workspace-write', policy: 'deny' },
+    default: { agentMode: 'workspace-write', policy: 'ask' },
+  },
+  thinking: 'reasoning_effort',
 }
 
+export function codexMode(choice: Choice, mode: Mode): AcpMode {
+  return acpMode(CODEX, choice.tools === 'read', mode)
+}
 
 export const codex = {
   name: 'codex',
@@ -70,21 +90,22 @@ export const codex = {
     },
   },
   start: ({ choice, prompt, session, root, inbox, guard, mode, installed }) => {
-    const { agentMode, policy } = codexMode(choice, mode)
+    const readOnly = codexMode(choice, mode).agentMode === 'read-only'
     // Fail closed: without the guard, MCP servers would run outside the read-only sandbox.
-    if (agentMode === 'read-only' && guard === undefined) throw new Error('codex cannot prove read-only without its MCP guard')
+    if (readOnly && guard === undefined) throw new Error('codex cannot prove read-only without its MCP guard')
     if (installed === undefined) throw new Error('codex-acp is not installed')
-    const adapter = ['node', installed]
-    return {
-      argv: relayArgv(root, adapter),
-      env: {
-        ...relayEnv({ inbox, steer: 'steering', session, model: choice.model, agentMode, policy, config: choice.thinking ? { reasoning_effort: choice.thinking } : {} }),
-        // The person's own Codex, not the copy codex-acp bundles.
-        CODEX_PATH: 'codex',
-        ...(agentMode === 'read-only' ? guard : {}),
-      },
-      input: prompt,
-    }
+    return acpStart(CODEX, {
+      root,
+      prompt,
+      readOnly: choice.tools === 'read',
+      mode,
+      inbox,
+      session,
+      model: choice.model,
+      thinking: choice.thinking,
+      command: ['node', installed],
+      ...(readOnly ? { env: guard } : {}),
+    })
   },
   events: () => relayEvents(),
   // The relay names the model the session runs on.
@@ -92,7 +113,8 @@ export const codex = {
   failure: (_exit, stderr) =>
     sessionLost(stderr)
       ? {
-          message: "codex could not find this agent's earlier session, so this message did not run. Send it again to start a new codex session.",
+          message:
+            "codex could not find this agent's earlier session, so this message did not run. Send it again to start a new codex session.",
           sessionLost: true,
         }
       : undefined,

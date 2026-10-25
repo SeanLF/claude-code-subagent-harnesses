@@ -1,9 +1,10 @@
-import type { StreamHook } from 'claude-code'
+import type { EngineInterface, StreamHook, TurnStepChunk, TurnStepResult } from 'claude-code'
 import type { Choice } from '../types'
+import { endJob, type Job, type Mark, pump } from './acp/steps'
 import type { Adapter, Mode } from './adapter'
 import { deliver, handbackAsked, respond, textChunks } from './handback'
 import { helpOf, isModel, promptOf } from './prompt'
-import { notActive, run } from './run'
+import { notActive, type RunResult, run } from './run'
 import { openInbox } from './steer'
 import type { World } from './world'
 
@@ -31,7 +32,12 @@ async function handbackOf(w: World, $: Parameters<StepHook>[0], agentId: string)
 
 // Walks up from the session's folder: relative paths resolve there, and the root is its own parent.
 // Says `unchecked` when it cannot finish (a stat refused, or a hook withheld realPath): not proven clean.
-async function foundAbove($: Parameters<StepHook>[0], folder: string, harmless: readonly string[], skip?: string): Promise<string | 'unchecked' | undefined> {
+async function foundAbove(
+  $: Parameters<StepHook>[0],
+  folder: string,
+  harmless: readonly string[],
+  skip?: string,
+): Promise<string | 'unchecked' | undefined> {
   let prefix = ''
   for (let depth = 0; depth < 64; depth += 1) {
     const found = await $.fs.stat(`${prefix}${folder}`, { resolve: true }).catch(() => undefined)
@@ -54,7 +60,9 @@ async function foundAbove($: Parameters<StepHook>[0], folder: string, harmless: 
 async function probeModel($: Parameters<StepHook>[0], adapter: Adapter, choice: Choice, session?: string): Promise<string | undefined> {
   if (!adapter.probe) return undefined
   const env = adapter.probe.env?.(choice)
-  const asked = await $.process.run(adapter.probe.argv(choice, session), { timeoutMs: 15_000, ...(env ? { env } : {}) }).catch(() => undefined)
+  const asked = await $.process
+    .run(adapter.probe.argv(choice, session), { timeoutMs: 15_000, ...(env ? { env } : {}) })
+    .catch(() => undefined)
   return asked?.exitCode === 0 ? adapter.probe.model(asked.stdout) : undefined
 }
 
@@ -94,14 +102,30 @@ async function relayReady(w: World, $: Parameters<StepHook>[0], adapter: Adapter
         await $.fs.write(`${dir}/package.json`, '{ "private": true }\n')
         argv = ['npm', 'install', ...flags, `${install.package}@latest`]
       } else {
-        if (await $.fs.stat(entry).then((s) => s.kind === 'file', () => false)) return entry
+        if (
+          await $.fs.stat(entry).then(
+            (s) => s.kind === 'file',
+            () => false,
+          )
+        )
+          return entry
         for (const file of install.files) await $.fs.write(`${dir}/${file.split('/').at(-1)}`, await $.fs.read(`${$.plugin.root}/${file}`))
         // Exactly the locked tree, each package's integrity checked by npm.
         argv = ['npm', 'ci', ...flags]
       }
-      const done = await $.process.run(argv, { cwd: dir, timeoutMs: 300_000 }).catch((error: unknown) => ({ exitCode: -1, stderr: String(error) }))
+      const done = await $.process
+        .run(argv, { cwd: dir, timeoutMs: 300_000 })
+        .catch((error: unknown) => ({ exitCode: -1, stderr: String(error) }))
       // Offline, latest keeps the newest it installed before rather than refusing.
-      if (done.exitCode !== 0 && latest && (await $.fs.stat(entry).then((s) => s.kind === 'file', () => false))) return entry
+      if (
+        done.exitCode !== 0 &&
+        latest &&
+        (await $.fs.stat(entry).then(
+          (s) => s.kind === 'file',
+          () => false,
+        ))
+      )
+        return entry
       if (done.exitCode !== 0) throw new Error(done.stderr.trim().split('\n').slice(-3).join(' ') || `npm ci exited with ${done.exitCode}`)
       return entry
     })()
@@ -124,17 +148,34 @@ async function readOnlyGuard($: Parameters<StepHook>[0], adapter: Adapter): Prom
   return (listed?.exitCode === 0 ? guard.env(listed.stdout) : undefined) ?? guard.why
 }
 
-export async function* turnStep(
-  w: World,
-  $: Parameters<StepHook>[0],
-  e: Parameters<StepHook>[1],
-  next: Parameters<StepHook>[2],
-) {
+// A run outlives the step that started it: each harness tool call ends a step with a call to via's
+// tool, whose tool.call hook reads the run on until the harness finishes that call (answerCall), and
+// the next step reads on from there. Whichever hook reads the run lends it its abort signal.
+export async function* turnStep(w: World, $: Parameters<StepHook>[0], e: Parameters<StepHook>[1], next: Parameters<StepHook>[2]) {
   const agentId = e.agentId
   if (agentId === undefined) return yield* next(e)
   const adapter = await adapterOf(w, $, agentId)
   if (adapter === undefined) return yield* next(e)
+  const job = w.jobs.get(agentId)
+  if (job !== undefined) {
+    if (job.turnId === e.turnId) return yield* pump(w, job, e, next.signal)
+    endJob(w, agentId)
+  }
+  const started = yield* begin(w, adapter, $, e, agentId)
+  if (started === undefined) return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], '')
+  if ('answer' in started) return started
+  w.jobs.set(agentId, started)
+  return yield* pump(w, started, e, next.signal)
+}
 
+// Everything before the run: refusals answer at once; otherwise the run as a job.
+async function* begin(
+  w: World,
+  adapter: Adapter,
+  $: Parameters<StepHook>[0],
+  e: Parameters<StepHook>[1],
+  agentId: string,
+): AsyncGenerator<TurnStepChunk, TurnStepResult | Job | undefined> {
   const turn = w.turns.get(e.turnId)
   if (turn === undefined) {
     // A compaction can take a step with no turn.start: keep the agent's real answer, not the stub.
@@ -177,8 +218,7 @@ export async function* turnStep(
     ...(asked.tools ? { tools: asked.tools } : {}),
     ...(asked.thinking ? { thinking: asked.thinking } : {}),
   }
-  const changed =
-    merged.model !== held.value?.model || merged.tools !== held.value?.tools || merged.thinking !== held.value?.thinking
+  const changed = merged.model !== held.value?.model || merged.tools !== held.value?.tools || merged.thinking !== held.value?.thinking
   if (changed) await $.state.set(ref, merged)
 
   // What the person allows Claude itself, as the spawn carried it: plan mode is read-only here too.
@@ -208,38 +248,79 @@ export async function* turnStep(
   }
   const ready = await relayReady(w, $, adapter)
   if (typeof ready === 'string') return yield* respond(e, textChunks(ready), ready)
-  const sessionRef = { plugin: 'via', key: 'sessions', id: agentId } as const
   const early = adapter.probe && !adapter.probe.after ? probeModel($, adapter, chosen) : undefined
   const probe = (latest: string | undefined) => early ?? (latest ? probeModel($, adapter, chosen, latest) : Promise.resolve(undefined))
   // Only this run's report may answer a later no-turn step: an aborted run leaves none.
   await $.state.set({ plugin: 'via', key: 'reports', id: agentId }, '')
   await $.state.set({ plugin: 'via', key: 'handedBack', id: agentId }, false)
-  let prompt = asked.prompt
+  const abort = new AbortController()
+  // The run keeps this step's `$` for its whole life, through later steps and tool calls.
+  const job: Job = {
+    turnId: e.turnId,
+    abort,
+    held: [],
+    outputs: new Map(),
+    count: 0,
+    gen: drive(w, $, {
+      adapter,
+      e,
+      turn,
+      agentId,
+      prompt: asked.prompt,
+      chosen,
+      mode,
+      installed: ready.installed,
+      guard,
+      probe,
+      signal: abort.signal,
+    }),
+  }
+  return job
+}
+
+// What one run needs, settled before it starts.
+type Drive = {
+  adapter: Adapter
+  e: { turnId: string; index: number }
+  turn: NonNullable<ReturnType<World['turns']['get']>>
+  agentId: string
+  prompt: string
+  chosen: Choice
+  mode: Mode
+  installed: string | undefined
+  guard: Readonly<Record<string, string>> | undefined
+  probe: (latest: string | undefined) => Promise<string | undefined>
+  signal: AbortSignal
+}
+
+async function* drive(w: World, $: EngineInterface, d: Drive): AsyncGenerator<TurnStepChunk | Mark, TurnStepResult> {
+  const { adapter, e, turn, agentId, chosen, mode, installed, guard, probe, signal } = d
+  let prompt = d.prompt
   let block = 0
-  let result
+  let result: RunResult
   // An interrupted run is followed at once by its message, on the same session.
   for (;;) {
-    const session = (await $.state.get(sessionRef)).value
+    const session = (await $.state.get({ plugin: 'via', key: 'sessions', id: agentId })).value
     const inbox = adapter.steer ? await openInbox($, adapter.name, agentId, w.inboxes) : undefined
-    result = yield* run(w, adapter, $, e, {
+    result = yield* run(w, adapter, $, {
       agentId,
       choice: chosen,
       prompt,
-      signal: next.signal,
+      signal,
       inbox,
       session,
       mode,
-      installed: ready.installed,
+      installed,
       block,
       guard,
       probe,
       // Saved the moment the harness issues it: a reload mid-run must not lose the session.
       save: async (id) => {
-        if (id !== session) await $.state.set(sessionRef, id)
+        if (id !== session) await $.state.set({ plugin: 'via', key: 'sessions', id: agentId }, id)
       },
     })
     if (result.next === undefined) break
-    if (next.signal.aborted) return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], '')
+    if (signal.aborted) return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], '')
     prompt = result.next
     block = result.block
   }

@@ -4,7 +4,10 @@ import type { Turn } from './world'
 export const HANDBACK_TOOL = 'SubagentHandback'
 
 export function textChunks(text: string): TurnStepChunk[] {
-  return [{ kind: 'text', index: 0, text }, { kind: 'stop', stopReason: 'end_turn', usage: null }]
+  return [
+    { kind: 'text', index: 0, text },
+    { kind: 'stop', stopReason: 'end_turn', usage: null },
+  ]
 }
 
 export async function* respond(

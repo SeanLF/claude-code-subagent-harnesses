@@ -1,53 +1,52 @@
-import type { TurnStepChunk } from 'claude-code'
-import { expect, mock, test, type TestBody } from 'claude-code/testing'
+import { expect, mock, type TestBody, test } from 'claude-code/testing'
 
-import { STEP } from '../helpers'
+import { run, STEP } from '../helpers'
 
 type TestOn = Parameters<TestBody>[1]
 type Spawn = { argv: string[]; input: string | undefined }
 
 // Captured from agy 1.4.7 `--output-format stream-json` (2026-10-24), compacted: init's tool
 // list, tool outputs and timings dropped; every field the adapter reads kept as captured.
-const RUN = [
-  "{\"event\":\"init\",\"conversation_id\":\"bcaf913f-b720-4789-919c-194b72343a9d\",\"init\":{\"permission_mode\":\"always-proceed\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":0,\"state\":\"DONE\",\"step_type\":\"user_input\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":1,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"PONG7\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":1,\"state\":\"DONE\",\"step_type\":\"agent_response\",\"text_delta\":\"\\n\",\"usage\":{\"input_tokens\":7849,\"output_tokens\":293,\"thinking_tokens\":290,\"cache_read_tokens\":0,\"total_tokens\":8142}}}",
-  "{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"num_turns\":1,\"usage\":{\"input_tokens\":7849,\"output_tokens\":293,\"thinking_tokens\":290,\"cache_read_tokens\":0,\"total_tokens\":8142}}}",
-].join('\n') + '\n'
+const RUN = `${[
+  '{"event":"init","conversation_id":"bcaf913f-b720-4789-919c-194b72343a9d","init":{"permission_mode":"always-proceed"}}',
+  '{"event":"step_update","step_update":{"step_index":0,"state":"DONE","step_type":"user_input"}}',
+  '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"PONG7"}}',
+  '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\\n","usage":{"input_tokens":7849,"output_tokens":293,"thinking_tokens":290,"cache_read_tokens":0,"total_tokens":8142}}}',
+  '{"event":"result","result":{"status":"SUCCESS","num_turns":1,"usage":{"input_tokens":7849,"output_tokens":293,"thinking_tokens":290,"cache_read_tokens":0,"total_tokens":8142}}}',
+].join('\n')}\n`
 // A question that read a file, then answered; the last step read 17582 cached tokens.
-const TOOLS = [
-  "{\"event\":\"init\",\"conversation_id\":\"3cc9bc03-3f0a-499f-b17c-f701c893df9b\",\"init\":{\"permission_mode\":\"always-proceed\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":0,\"state\":\"DONE\",\"step_type\":\"user_input\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":1,\"state\":\"DONE\",\"step_type\":\"agent_response\",\"usage\":{\"input_tokens\":8649,\"output_tokens\":639,\"thinking_tokens\":556,\"cache_read_tokens\":0,\"total_tokens\":9288}}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":2,\"state\":\"ACTIVE\",\"step_type\":\"tool\",\"tool_name\":\"read_file\",\"tool_info\":{\"name\":\"read_file\",\"parameters\":{\"Path\":\"/w/seed\"}}}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":2,\"state\":\"DONE\",\"step_type\":\"tool\",\"tool_name\":\"read_file\",\"tool_info\":{\"name\":\"read_file\",\"parameters\":{\"Path\":\"/w/seed\"}}}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":23,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"seed\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":23,\"state\":\"DONE\",\"step_type\":\"agent_response\",\"text_delta\":\"\\n\",\"usage\":{\"input_tokens\":3464,\"output_tokens\":868,\"thinking_tokens\":867,\"cache_read_tokens\":17582,\"total_tokens\":4332}}}",
-  "{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"num_turns\":1,\"usage\":{\"input_tokens\":139191,\"output_tokens\":3048,\"thinking_tokens\":2250,\"cache_read_tokens\":17582,\"total_tokens\":142239}}}",
-].join('\n') + '\n'
+const TOOLS = `${[
+  '{"event":"init","conversation_id":"3cc9bc03-3f0a-499f-b17c-f701c893df9b","init":{"permission_mode":"always-proceed"}}',
+  '{"event":"step_update","step_update":{"step_index":0,"state":"DONE","step_type":"user_input"}}',
+  '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":8649,"output_tokens":639,"thinking_tokens":556,"cache_read_tokens":0,"total_tokens":9288}}}',
+  '{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"read_file","tool_info":{"name":"read_file","parameters":{"Path":"/w/seed"}}}}',
+  '{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"read_file","tool_info":{"name":"read_file","parameters":{"Path":"/w/seed"}}}}',
+  '{"event":"step_update","step_update":{"step_index":23,"state":"ACTIVE","step_type":"agent_response","text_delta":"seed"}}',
+  '{"event":"step_update","step_update":{"step_index":23,"state":"DONE","step_type":"agent_response","text_delta":"\\n","usage":{"input_tokens":3464,"output_tokens":868,"thinking_tokens":867,"cache_read_tokens":17582,"total_tokens":4332}}}',
+  '{"event":"result","result":{"status":"SUCCESS","num_turns":1,"usage":{"input_tokens":139191,"output_tokens":3048,"thinking_tokens":2250,"cache_read_tokens":17582,"total_tokens":142239}}}',
+].join('\n')}\n`
 // Text, a tool, then text: two agent_response steps (agy's own result.response joins both).
-const TWO = [
-  "{\"event\":\"init\",\"conversation_id\":\"1c67bfa1-e8e9-427f-9649-abf2256322ac\",\"init\":{\"permission_mode\":\"always-proceed\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":0,\"state\":\"DONE\",\"step_type\":\"user_input\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":1,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"Checking the file now\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":1,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\".\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":1,\"state\":\"DONE\",\"step_type\":\"agent_response\",\"text_delta\":\"\\n\",\"usage\":{\"input_tokens\":7868,\"output_tokens\":1424,\"thinking_tokens\":1335,\"cache_read_tokens\":0,\"total_tokens\":9292}}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":2,\"state\":\"ACTIVE\",\"step_type\":\"tool\",\"tool_name\":\"read_file\",\"tool_info\":{\"name\":\"read_file\",\"parameters\":{\"Path\":\"/w/seed2\"}}}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":2,\"state\":\"DONE\",\"step_type\":\"tool\",\"tool_name\":\"read_file\",\"tool_info\":{\"name\":\"read_file\",\"parameters\":{\"Path\":\"/w/seed2\"}}}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":3,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"zebra-41\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":3,\"state\":\"DONE\",\"step_type\":\"agent_response\",\"text_delta\":\"\\n\",\"usage\":{\"input_tokens\":9381,\"output_tokens\":70,\"thinking_tokens\":66,\"cache_read_tokens\":0,\"total_tokens\":9451}}}",
-  "{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"num_turns\":1,\"usage\":{\"input_tokens\":17249,\"output_tokens\":1494,\"thinking_tokens\":1401,\"cache_read_tokens\":0,\"total_tokens\":18743}}}",
-].join('\n') + '\n'
+const TWO = `${[
+  '{"event":"init","conversation_id":"1c67bfa1-e8e9-427f-9649-abf2256322ac","init":{"permission_mode":"always-proceed"}}',
+  '{"event":"step_update","step_update":{"step_index":0,"state":"DONE","step_type":"user_input"}}',
+  '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"Checking the file now"}}',
+  '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"."}}',
+  '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\\n","usage":{"input_tokens":7868,"output_tokens":1424,"thinking_tokens":1335,"cache_read_tokens":0,"total_tokens":9292}}}',
+  '{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"read_file","tool_info":{"name":"read_file","parameters":{"Path":"/w/seed2"}}}}',
+  '{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"read_file","tool_info":{"name":"read_file","parameters":{"Path":"/w/seed2"}}}}',
+  '{"event":"step_update","step_update":{"step_index":3,"state":"ACTIVE","step_type":"agent_response","text_delta":"zebra-41"}}',
+  '{"event":"step_update","step_update":{"step_index":3,"state":"DONE","step_type":"agent_response","text_delta":"\\n","usage":{"input_tokens":9381,"output_tokens":70,"thinking_tokens":66,"cache_read_tokens":0,"total_tokens":9451}}}',
+  '{"event":"result","result":{"status":"SUCCESS","num_turns":1,"usage":{"input_tokens":17249,"output_tokens":1494,"thinking_tokens":1401,"cache_read_tokens":0,"total_tokens":18743}}}',
+].join('\n')}\n`
 // A follow-up resumed with --conversation: the same id comes back.
-const RESUMED = [
-  "{\"event\":\"init\",\"conversation_id\":\"f99e03a5-cc1d-480b-89df-72c64d19928d\",\"init\":{\"permission_mode\":\"always-proceed\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":4,\"state\":\"DONE\",\"step_type\":\"user_input\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":5,\"state\":\"DONE\",\"step_type\":\"system_message\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":6,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"zebra-41\"}}",
-  "{\"event\":\"step_update\",\"step_update\":{\"step_index\":6,\"state\":\"DONE\",\"step_type\":\"agent_response\",\"text_delta\":\"\\n\",\"usage\":{\"input_tokens\":8593,\"output_tokens\":49,\"thinking_tokens\":45,\"cache_read_tokens\":0,\"total_tokens\":8642}}}",
-  "{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"num_turns\":2,\"usage\":{\"input_tokens\":24752,\"output_tokens\":485,\"thinking_tokens\":393,\"cache_read_tokens\":0,\"total_tokens\":25237}}}",
-].join('\n') + '\n'
+const RESUMED = `${[
+  '{"event":"init","conversation_id":"f99e03a5-cc1d-480b-89df-72c64d19928d","init":{"permission_mode":"always-proceed"}}',
+  '{"event":"step_update","step_update":{"step_index":4,"state":"DONE","step_type":"user_input"}}',
+  '{"event":"step_update","step_update":{"step_index":5,"state":"DONE","step_type":"system_message"}}',
+  '{"event":"step_update","step_update":{"step_index":6,"state":"ACTIVE","step_type":"agent_response","text_delta":"zebra-41"}}',
+  '{"event":"step_update","step_update":{"step_index":6,"state":"DONE","step_type":"agent_response","text_delta":"\\n","usage":{"input_tokens":8593,"output_tokens":49,"thinking_tokens":45,"cache_read_tokens":0,"total_tokens":8642}}}',
+  '{"event":"result","result":{"status":"SUCCESS","num_turns":2,"usage":{"input_tokens":24752,"output_tokens":485,"thinking_tokens":393,"cache_read_tokens":0,"total_tokens":25237}}}',
+].join('\n')}\n`
 const RESUMED_ID = 'f99e03a5-cc1d-480b-89df-72c64d19928d'
 const RUN_ID = 'bcaf913f-b720-4789-919c-194b72343a9d'
 const AGENT = { id: 'a1', description: 'x', type: 'via:agy', status: 'running' } as const
@@ -78,16 +77,6 @@ function arrange(
   })
 }
 
-async function run($: Parameters<TestBody>[0], step: typeof STEP = STEP) {
-  const chunks: TurnStepChunk[] = []
-  const stream = $.turn.step(step)
-  for (;;) {
-    const next = await stream.next()
-    if (next.done) return { chunks, result: next.value }
-    chunks.push(next.value)
-  }
-}
-
 const NEW = ['agy', '--output-format', 'stream-json', '--disable-slash-commands', '--sandbox']
 
 test('an agy agent sends its prompt on stdin and signs with the model agy says the flags select', async ($, on) => {
@@ -100,7 +89,13 @@ test('an agy agent sends its prompt on stdin and signs with the model agy says t
   expect(spawns[0]?.input).toBe('say PONG7')
   expect(probes).toEqual([['agy', '--output-format', 'json', '-p=/model']])
   expect(result.answer).toBe('PONG7\n\n— answered by agy, gemini-3.8-flash-high')
-  expect(result.usage).toEqual({ model: 'gemini-3.8-flash-high', input_tokens: 7849, output_tokens: 293, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+  expect(result.usage).toEqual({
+    model: 'gemini-3.8-flash-high',
+    input_tokens: 7849,
+    output_tokens: 293,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  })
 })
 
 test('a prompt that starts with /, @ or -- reaches agy as text on stdin', async ($, on) => {
@@ -157,7 +152,13 @@ test('a tool step shows once, only the last message is the answer, and usage kee
   expect(chunks.filter((c) => c.kind === 'text' && c.text.includes('▸ read_file')).length).toBe(1)
   expect(result.answer).toBe('seed\n\n— answered by agy, gemini-3.8-flash-high')
   // The last step, not both steps summed.
-  expect(result.usage).toEqual({ model: 'gemini-3.8-flash-high', input_tokens: 3464, output_tokens: 868, cache_read_input_tokens: 17582, cache_creation_input_tokens: 0 })
+  expect(result.usage).toEqual({
+    model: 'gemini-3.8-flash-high',
+    input_tokens: 3464,
+    output_tokens: 868,
+    cache_read_input_tokens: 17582,
+    cache_creation_input_tokens: 0,
+  })
 })
 
 test('the conversation id is saved, and a follow-up resumes it with --conversation', async ($, on) => {
@@ -197,14 +198,19 @@ test('a lost conversation is said with the answer, since agy silently starts a n
   })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'continue' })
   const { result } = await run($)
-  expect(result.answer).toBe("PONG7\n\nagy could not find this agent's earlier conversation, so this answer comes from a new one without that context.\n\n— answered by agy, gemini-3.8-flash-high")
+  expect(result.answer).toBe(
+    "PONG7\n\nagy could not find this agent's earlier conversation, so this answer comes from a new one without that context.\n\n— answered by agy, gemini-3.8-flash-high",
+  )
   expect(saved).toEqual([RUN_ID])
 })
 
 test('a result other than SUCCESS is a failure in agy words, unsigned', async ($, on) => {
   const spawns: Spawn[] = []
-  const failed = [{ event: 'init', conversation_id: RUN_ID }, { event: 'result', result: { status: 'ERROR', error: 'quota exhausted' } }]
-  arrange(on, spawns, { stdout: failed.map((e) => JSON.stringify(e)).join('\n') + '\n', code: 3 })
+  const failed = [
+    { event: 'init', conversation_id: RUN_ID },
+    { event: 'result', result: { status: 'ERROR', error: 'quota exhausted' } },
+  ]
+  arrange(on, spawns, { stdout: `${failed.map((e) => JSON.stringify(e)).join('\n')}\n`, code: 3 })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { result } = await run($)
   expect(result.answer).toBe("agy's model call failed: quota exhausted")
@@ -255,7 +261,9 @@ test('a model named in the stream is believed over the probe', async ($, on) => 
 })
 
 test('a resumed run whose init carries no id raises no lost-conversation notice', async ($, on) => {
-  const noId = RESUMED.split('\n').map((l) => (l.startsWith('{"event":"init"') ? '{"event":"init","init":{}}' : l)).join('\n')
+  const noId = RESUMED.split('\n')
+    .map((l) => (l.startsWith('{"event":"init"') ? '{"event":"init","init":{}}' : l))
+    .join('\n')
   arrange(on, [], { stdout: noId })
   on('state.get', (_, e, next) => (e.key === 'sessions' ? { value: { value: RESUMED_ID, version: 1 } } : next(e)))
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'what did you say?' })
@@ -267,7 +275,13 @@ test("usage is the last step's, not agy's own result total", async ($, on) => {
   arrange(on, [], { stdout: TWO })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'check seed2' })
   const { result } = await run($)
-  expect(result.usage).toEqual({ model: 'gemini-3.8-flash-high', input_tokens: 9381, output_tokens: 70, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+  expect(result.usage).toEqual({
+    model: 'gemini-3.8-flash-high',
+    input_tokens: 9381,
+    output_tokens: 70,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  })
   expect(total.input_tokens).toBe(17249)
 })
 

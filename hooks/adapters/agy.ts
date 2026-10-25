@@ -1,3 +1,4 @@
+import { isRecord } from '../acp/json'
 import type { Adapter, Norm } from '../adapter'
 
 // Written from agy 1.4.7's `--output-format stream-json`, captured 2026-10-24: agy publishes
@@ -19,9 +20,6 @@ type AgyEvent =
 
 const THINKING = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-
 function wire(line: string): AgyEvent | undefined {
   try {
     const parsed: unknown = JSON.parse(line)
@@ -41,7 +39,8 @@ const flags = (choice: { model?: string; thinking?: string }) => [
 export const agy = {
   name: 'agy',
   bin: 'agy',
-  about: 'Antigravity CLI agent: Gemini, Claude and GPT-OSS models through a Google account, own tools (edits files, runs sandboxed commands; no read-only mode).',
+  about:
+    'Antigravity CLI agent: Gemini, Claude and GPT-OSS models through a Google account, own tools (edits files, runs sandboxed commands; no read-only mode).',
   modelExample: 'gemini-3.8-flash',
   // Neither --mode plan nor --sandbox is read-only: plan mode ran a command that wrote a file
   // (tested live on 1.4.7), and --sandbox restricts only terminal commands.
@@ -53,7 +52,15 @@ export const agy = {
   // --sandbox confines the commands agy runs (credentials such as ~/.kube are refused by the OS,
   // tested live); it does not stop agy's own file edits.
   start: ({ choice, prompt, session }) => ({
-    argv: ['agy', '--output-format', 'stream-json', '--disable-slash-commands', '--sandbox', ...flags(choice), ...(session ? ['--conversation', session] : [])],
+    argv: [
+      'agy',
+      '--output-format',
+      'stream-json',
+      '--disable-slash-commands',
+      '--sandbox',
+      ...flags(choice),
+      ...(session ? ['--conversation', session] : []),
+    ],
     input: prompt,
   }),
   // `/model` resolves the flags to the exact model, effort variant included, without a turn.
@@ -81,7 +88,10 @@ export const agy = {
           if (typeof e.init?.model === 'string' && e.init.model) out.push({ k: 'model', name: e.init.model })
           // A missing conversation is only a warning: agy starts a new one and succeeds.
           if (session && id && id !== session)
-            out.push({ k: 'notice', t: "agy could not find this agent's earlier conversation, so this answer comes from a new one without that context." })
+            out.push({
+              k: 'notice',
+              t: "agy could not find this agent's earlier conversation, so this answer comes from a new one without that context.",
+            })
           return out
         }
         case 'step_update': {
@@ -98,7 +108,10 @@ export const agy = {
             // input_tokens excludes cached reads: a captured step read 17582 cached tokens on 3464 input.
             if (s.state === 'DONE' && s.usage) {
               const u = s.usage
-              out.push({ k: 'usage', usage: { input: u.input_tokens ?? 0, cacheRead: u.cache_read_tokens ?? 0, cacheWrite: 0, output: u.output_tokens ?? 0 } })
+              out.push({
+                k: 'usage',
+                usage: { input: u.input_tokens ?? 0, cacheRead: u.cache_read_tokens ?? 0, cacheWrite: 0, output: u.output_tokens ?? 0 },
+              })
             }
             return out
           }

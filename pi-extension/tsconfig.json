@@ -2,11 +2,7 @@
   "//": "pi loads this extension under Node; the hooks run in Claude Code's engine and must not see Node's globals.",
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "types": [
-      "node"
-    ]
+    "types": ["node"]
   },
-  "include": [
-    "."
-  ]
+  "include": ["."]
 }

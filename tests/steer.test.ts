@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { arrange, bottom, ENV, hang, hold, lines, run, split, type Spawn, type Write } from './helpers'
+import { arrange, bottom, ENV, hang, hold, lines, run, type Spawn, split, type Write } from './helpers'
 
 test('a SendMessage to a live pi agent is steered into its inbox', async ($, on) => {
   const clock = mock.clock(on)
@@ -122,7 +122,6 @@ test('a steer pi never took is named as undelivered', async ($, on) => {
   expect(result.answer.indexOf('Not delivered before pi finished')).toBeLessThan(result.answer.indexOf('— answered by pi'))
 })
 
-
 test('with no home folder there is no inbox, never the shared /tmp, and a SendMessage becomes a follow-up', async ($, on) => {
   const clock = mock.clock(on)
   const spawns: Spawn[] = []
@@ -187,10 +186,16 @@ test('an interrupt: message aborts the running pi step, then runs on the same se
   on('process.spawn', async function* (_, e) {
     spawns.push({ argv: [...e.argv], input: e.input, env: e.env })
     if (spawns.length === 1) {
-      yield { stream: 'stdout' as const, text: `${JSON.stringify(start)}\n${JSON.stringify({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'sleep 30' } })}\n` }
+      yield {
+        stream: 'stdout' as const,
+        text: `${JSON.stringify(start)}\n${JSON.stringify({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'sleep 30' } })}\n`,
+      }
       await asked
       // What pi prints when its extension aborts the step (captured from pi -p --mode json).
-      const aborted = { type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: 'This operation was aborted', usage: { input: 1, output: 1 } } }
+      const aborted = {
+        type: 'message_end',
+        message: { role: 'assistant', stopReason: 'error', errorMessage: 'This operation was aborted', usage: { input: 1, output: 1 } },
+      }
       yield { stream: 'stdout' as const, text: `${JSON.stringify(aborted)}\n` }
       return { value: { code: 0, signal: null } }
     }
@@ -202,7 +207,10 @@ test('an interrupt: message aborts the running pi step, then runs on the same se
   await clock.settle()
   await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'also do B', tool_use_id: 's' })
   const sent = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'interrupt: stop and do C', tool_use_id: 'i' })
-  expect(sent.result).toEqual({ success: true, message: 'Interrupting the running pi agent: it stops its current step, then takes this message.' })
+  expect(sent.result).toEqual({
+    success: true,
+    message: 'Interrupting the running pi agent: it stops its current step, then takes this message.',
+  })
   expect(writes.find((w) => w.text.includes('"interrupt"'))?.text.split('\n')).toContain(JSON.stringify({ interrupt: 'stop and do C' }))
   const { chunks, result } = await pending
   expect(spawns).toHaveLength(2)

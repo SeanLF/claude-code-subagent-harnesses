@@ -1,35 +1,9 @@
 import type { ProcessSpawnRequest, ProcessSpawnResult } from 'claude-code'
 import type { Choice } from '../types'
 
-export type Usage = {
-  readonly input: number
-  readonly cacheRead: number
-  readonly cacheWrite: number
-  readonly output: number
-}
+export type { Ask, Mode, Norm, Usage } from './acp/norm'
 
-export type Norm =
-  | { readonly k: 'message' } // a new assistant message starts: only the last one is the answer
-  | { readonly k: 'session'; readonly id: string } // harness-issued id, saved at once for follow-ups
-  | { readonly k: 'model'; readonly name: string }
-  | { readonly k: 'text' | 'thinking' | 'tool'; readonly t: string }
-  | { readonly k: 'usage'; readonly usage: Usage } // the core keeps the last one: per message, never a running total
-  | { readonly k: 'steered' }
-  | { readonly k: 'error'; readonly message: string }
-  | { readonly k: 'notice'; readonly t: string } // said after the answer, as part of it
-  | { readonly k: 'interrupted' } // the harness took an interrupt itself: nothing for the core to rerun
-  | { readonly k: 'ask'; readonly ask: Ask } // a permission question for the person; the core writes the answer to the inbox
-
-export type Ask = {
-  readonly id: string
-  readonly title: string
-  readonly kind: string
-  readonly command?: string
-  readonly options: readonly { readonly optionId: string; readonly name: string; readonly kind: string }[]
-}
-
-// Claude Code's permission mode, as the spawn carried it: what the person allows Claude itself.
-export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk'
+import type { Mode, Norm } from './acp/norm'
 
 export type Adapter = {
   readonly name: string
@@ -48,11 +22,17 @@ export type Adapter = {
   readonly unsafeReadOnly?: { readonly folder: string; readonly harmless: readonly string[]; readonly why: string; readonly own?: boolean }
   // What a read-only run runs first, and the environment its output requires: when the harness cannot
   // prove it, turn.ts refuses the run. env returns undefined when the output does not prove it.
-  readonly readOnlyGuard?: { readonly argv: readonly string[]; env(stdout: string): Record<string, string> | undefined; readonly why: string }
+  readonly readOnlyGuard?: {
+    readonly argv: readonly string[]
+    env(stdout: string): Record<string, string> | undefined
+    readonly why: string
+  }
   // Runs behind relay/relay.mjs, which needs Node 22.18 or later. install: an ACP adapter via installs
   // once from a lockfile it ships, into ~/.claude/via/acp/<dir>; start then gets its entry point, or
   // 'latest' when the person chose to fetch the newest one instead.
-  readonly relay?: { readonly install?: { readonly dir: string; readonly package: string; readonly files: readonly string[]; readonly entry: string } }
+  readonly relay?: {
+    readonly install?: { readonly dir: string; readonly package: string; readonly files: readonly string[]; readonly entry: string }
+  }
   start(c: {
     choice: Choice
     prompt: string

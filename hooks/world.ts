@@ -1,10 +1,11 @@
+import type { Steps } from './acp/steps'
 import type { Adapter } from './adapter'
 import type { Activity } from './progress'
 import type { Inbox } from './steer'
 
 export type Turn = { prompt: string; report?: string; delivered: boolean }
 
-export type World = {
+export type World = Steps & {
   adapters: ReadonlyMap<string, Adapter>
   defaultModel: string
   codexAcp: 'pinned' | 'latest'

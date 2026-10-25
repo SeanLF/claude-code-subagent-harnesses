@@ -1,0 +1,217 @@
+import { isRecord } from './json'
+import type { Ask, Norm } from './norm'
+
+// An ACP agent runs behind relay/relay.mjs, which holds the connection open: the engine writes a
+// spawn's stdin once and closes it. The relay prints ACP session updates and {"relay": ...} events.
+
+// Paths under the working folder, as codex-acp's titles give them ("Read file '/abs/repo/a.ts'"), are
+// shown relative to it: the rest of the title survives the clip, and reads as the agent's own.
+// Only where a path starts (the title's start, a quote, a space, an opening parenthesis or =), so a path that merely
+// contains the folder (/x/a/repo/y for /a/repo) stays whole.
+const relative = (title: string, cwd: string) =>
+  cwd ? title.replace(new RegExp(`(^|[\\s'"(=])${cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`, 'g'), '$1') : title
+
+const clip = (text: string) => (text.length > 100 ? `${text.slice(0, 100)}…` : text)
+
+const cap = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text)
+const tail = (text: string, max: number) => (text.length > max ? `…${text.slice(-max)}` : text)
+
+// An edit as its changed lines: the path, then the lines it took out (-) and put in (+), past what both
+// versions share at the start and the end. A new file has no old text.
+function diffOf(path: string, oldText: string, newText: string): string {
+  const before = oldText ? oldText.split('\n') : []
+  const after = newText ? newText.split('\n') : []
+  let start = 0
+  while (start < before.length && start < after.length && before[start] === after[start]) start += 1
+  let endBefore = before.length
+  let endAfter = after.length
+  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
+    endBefore -= 1
+    endAfter -= 1
+  }
+  const lines = [path, ...before.slice(start, endBefore).map((l) => `- ${l}`), ...after.slice(start, endAfter).map((l) => `+ ${l}`)]
+  return lines.length > 41 ? `${lines.slice(0, 41).join('\n')}\n…` : lines.join('\n')
+}
+
+// What a finished tool call returned, as the agent reported it: its text content, a diff of each file
+// it edited, or its raw output. An exit code alone is not output (codex-acp reports one there): the
+// parser keeps it apart. Kept short: it lands in the subagent's transcript.
+function outputOf(u: Record<string, unknown>, cwd: string): string {
+  const parts: string[] = []
+  for (const item of Array.isArray(u.content) ? u.content.filter(isRecord) : []) {
+    const inner = item.content
+    if (item.type === 'content' && isRecord(inner) && typeof inner.text === 'string') parts.push(inner.text)
+    else if (item.type === 'diff' && typeof item.path === 'string' && typeof item.newText === 'string')
+      parts.push(diffOf(relative(item.path, cwd), typeof item.oldText === 'string' ? item.oldText : '', item.newText))
+  }
+  const raw = u.rawOutput
+  if (parts.length === 0 && raw !== undefined && raw !== null) {
+    if (typeof raw === 'string') parts.push(raw)
+    else if (isRecord(raw) && typeof raw.output === 'string') parts.push(raw.output)
+    else if (!(isRecord(raw) && typeof raw.exit_code === 'number' && Object.keys(raw).length === 1)) parts.push(JSON.stringify(raw))
+  }
+  return cap(parts.join('\n').trim(), 2000)
+}
+
+function ask(e: Record<string, unknown>): Ask | undefined {
+  if (typeof e.id !== 'string' || !Array.isArray(e.options)) return undefined
+  const options = e.options
+    .filter(isRecord)
+    .flatMap((o) =>
+      typeof o.optionId === 'string' && typeof o.name === 'string' && typeof o.kind === 'string'
+        ? [{ optionId: o.optionId, name: o.name, kind: o.kind }]
+        : [],
+    )
+  return {
+    id: e.id,
+    title: typeof e.title === 'string' ? e.title : '',
+    kind: typeof e.kind === 'string' ? e.kind : 'other',
+    ...(typeof e.command === 'string' ? { command: e.command } : {}),
+    options,
+  }
+}
+
+// A parser per run. Updates before the first prompt are a resumed session's history, replayed by
+// session/load: never part of this answer.
+export function relayEvents(): (line: string) => Norm[] {
+  let live = false
+  let context = 0
+  let speaking: unknown
+  let cwd = ''
+  const shown = new Set<string>()
+  const ended = new Set<string>()
+  const titles = new Map<string, string>()
+  const kinds = new Map<string, string>()
+  // A command's output, as codex-acp streams it (_meta.terminal_output_delta), and its exit code.
+  const printed = new Map<string, string>()
+  const exits = new Map<string, number>()
+  const paths = new Map<string, string>()
+  // What a call reported before it ended: codex-acp sends an edit's diff while it runs, not with its end.
+  const reported = new Map<string, string>()
+  return (line) => {
+    let e: unknown
+    try {
+      e = JSON.parse(line)
+    } catch {
+      return []
+    }
+    if (!isRecord(e)) return []
+    switch (e.relay) {
+      case 'session':
+        if (typeof e.cwd === 'string' && e.cwd) cwd = e.cwd.replace(/\/+$/, '')
+        return typeof e.sessionId === 'string' ? [{ k: 'session', id: e.sessionId }] : []
+      case 'model':
+        return typeof e.name === 'string' ? [{ k: 'model', name: e.name }] : []
+      case 'steered':
+        live = true
+        speaking = undefined
+        return [{ k: 'steered' }]
+      case 'interrupted':
+        return [{ k: 'interrupted' }, { k: 'tool', t: '\n▸ interrupted\n' }]
+      case 'ask': {
+        const asked = ask(e)
+        return asked ? [{ k: 'ask', ask: asked }] : []
+      }
+      case 'error':
+        return [{ k: 'error', message: typeof e.message === 'string' ? e.message : 'the relay failed' }]
+      case 'prompt_done': {
+        // The prompt's own count of what it wrote, beside the context the last usage_update reported.
+        const usage = isRecord(e.usage) ? e.usage : {}
+        const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0
+        return [{ k: 'usage', usage: { input: context, cacheRead: 0, cacheWrite: 0, output } }]
+      }
+      case undefined:
+        break
+      default:
+        return []
+    }
+    const u = e.update
+    if (!live || !isRecord(u)) return []
+    switch (u.sessionUpdate) {
+      case 'agent_message_chunk': {
+        const content = u.content
+        const text = isRecord(content) && content.type === 'text' && typeof content.text === 'string' ? content.text : ''
+        if (!text) return []
+        // Each message is a new one; only the last is the answer.
+        const out: Norm[] = []
+        // An agent that sends no message id speaks one message per prompt.
+        const id = u.messageId ?? 'unnamed'
+        if (id !== speaking) {
+          speaking = id
+          out.push({ k: 'message' })
+        }
+        out.push({ k: 'text', t: text })
+        return out
+      }
+      case 'agent_thought_chunk': {
+        const content = u.content
+        return isRecord(content) && typeof content.text === 'string' && content.text ? [{ k: 'thinking', t: content.text }] : []
+      }
+      case 'tool_call':
+      case 'tool_call_update': {
+        if (typeof u.toolCallId !== 'string') return []
+        const id = u.toolCallId
+        if (typeof u.title === 'string') titles.set(id, u.title)
+        if (typeof u.kind === 'string') kinds.set(id, u.kind)
+        const where = Array.isArray(u.locations) ? u.locations.find(isRecord) : undefined
+        if (typeof where?.path === 'string') paths.set(id, where.path)
+        const meta = isRecord(u._meta) ? u._meta : {}
+        const delta = isRecord(meta.terminal_output_delta) ? meta.terminal_output_delta.data : undefined
+        // The end of a long output is kept: that is where an error usually is.
+        if (typeof delta === 'string') printed.set(id, tail((printed.get(id) ?? '') + delta, 2000))
+        const raw = isRecord(u.rawOutput) ? u.rawOutput.exit_code : undefined
+        const exit = isRecord(meta.terminal_exit) ? meta.terminal_exit.exit_code : raw
+        if (typeof exit === 'number') exits.set(id, exit)
+        const now = Array.isArray(u.content) && u.content.length > 0 ? outputOf(u, cwd) : ''
+        if (now) reported.set(id, now)
+        const path = paths.get(id)
+        const call = (): Norm => ({
+          k: 'call',
+          id,
+          kind: kinds.get(id) ?? 'other',
+          title: clip(relative(titles.get(id) ?? 'tool', cwd)),
+          ...(path ? { path } : {}),
+        })
+        const out: Norm[] = []
+        // Announced once, when it starts running: opencode names the command only in an update.
+        if (u.status === 'in_progress' && !shown.has(id)) {
+          shown.add(id)
+          out.push(call())
+        }
+        if (u.status === 'completed' || u.status === 'failed') {
+          // A call reported only once done is announced then.
+          if (!shown.has(id)) {
+            shown.add(id)
+            out.push(call())
+          }
+          if (!ended.has(id)) {
+            ended.add(id)
+            const code = exits.get(id)
+            const said = outputOf(u, cwd) || reported.get(id) || (printed.get(id) ?? '').trim()
+            const output = code && !said.includes(`exit code ${code}`) ? `${said}${said ? '\n' : ''}exit code ${code}` : said
+            out.push({ k: 'called', id, output, failed: u.status === 'failed' })
+          }
+        }
+        return out
+      }
+      case 'plan': {
+        const entries = (Array.isArray(u.entries) ? u.entries.filter(isRecord) : []).flatMap((entry) =>
+          typeof entry.content === 'string'
+            ? [{ content: entry.content, status: typeof entry.status === 'string' ? entry.status : 'pending' }]
+            : [],
+        )
+        return entries.length > 0 ? [{ k: 'plan', entries }] : []
+      }
+      case 'usage_update':
+        // The agent's own count of its context, which is what Claude Code reads usage as.
+        if (typeof u.used !== 'number') return []
+        context = u.used
+        return [{ k: 'usage', usage: { input: u.used, cacheRead: 0, cacheWrite: 0, output: 0 } }]
+      default:
+        return []
+    }
+  }
+}
+
+// The relay's stderr, for an adapter's failure(): a resumed session the agent no longer has.
+export const sessionLost = (stderr: string) => stderr.includes('acp relay: session lost:')

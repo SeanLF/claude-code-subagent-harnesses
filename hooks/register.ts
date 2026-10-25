@@ -1,4 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { drawCall } from './acp/render'
+import { answerCall, endJob } from './acp/steps'
 import type { Adapter } from './adapter'
 import { HARNESSES } from './harnesses'
 import { descriptionOf } from './prompt'
@@ -12,7 +14,14 @@ async function onPath($: Pick<EngineInterface, 'env' | 'fs'>, bin: string): Prom
   const path = (await $.env.get('PATH')) ?? ''
   const dirs = path.split(path.includes(';') ? ';' : ':').filter(Boolean)
   const found = await Promise.all(
-    dirs.flatMap((dir) => [bin, `${bin}.exe`].map((name) => $.fs.stat(`${dir}/${name}`).then((s) => s.kind === 'file', () => false))),
+    dirs.flatMap((dir) =>
+      [bin, `${bin}.exe`].map((name) =>
+        $.fs.stat(`${dir}/${name}`).then(
+          (s) => s.kind === 'file',
+          () => false,
+        ),
+      ),
+    ),
   )
   return found.includes(true)
 }
@@ -34,16 +43,31 @@ export const register: Register = (on, options) => {
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
+    tool: 'mcp__via__step',
+    jobs: new Map(),
+    calls: new Map(),
   }
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    // Each harness tool call reaches Claude Code as a call to this tool, which runs nothing: its
+    // tool.call hook answers with what the harness reported. Bash would look the same, but a hook
+    // that fails is skipped and the real command would run; a call to this tool nobody answers fails.
+    world.tool = (
+      await $.tool.register({
+        name: 'step',
+        description:
+          "One step of this agent's work, already done: kind is what it did (execute, read, edit, search, fetch), title what it acted on. Calling it does nothing.",
+        inputSchema: { type: 'object', properties: { kind: { type: 'string' }, title: { type: 'string' } } },
+        isDeferred: true,
+      })
+    ).tool
     for (const adapter of world.adapters.values()) {
       if (!(await onPath($, adapter.bin))) continue
       await $.agent.register({
         name: adapter.name,
         description: descriptionOf(adapter),
         prompt: notActivePrompt(adapter.name),
-        tools: [],
+        tools: [world.tool],
         model: 'haiku',
       })
     }
@@ -75,7 +99,7 @@ export const register: Register = (on, options) => {
     return started
   })
 
-  on('turn.start', async ($, e, next) => {
+  on('turn.start', async (_, e, next) => {
     if (e.agentId !== undefined) {
       const prompt = e.text || world.seeds.get(e.agentId)
       world.seeds.delete(e.agentId)
@@ -84,12 +108,25 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('turn.complete', async ($, e, next) => {
+  on('turn.complete', async (_, e, next) => {
     world.turns.delete(e.turnId)
+    for (const [agentId, job] of world.jobs) if (job.turnId === e.turnId) endJob(world, agentId)
     return next(e)
   })
 
-  if (HARNESSES.some((adapter) => adapter.steer)) on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => sendMessage(world, $, e, next))
+  if (HARNESSES.some((adapter) => adapter.steer))
+    on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => sendMessage(world, $, e, next))
+
+  // The matcher's type names only built-in tools; a registered tool's full name is accepted at run time.
+  on('tool.call', { tool: 'mcp__via__step' as 'Bash' }, (_, e, next) => answerCall(world, e.tool_use_id, next.signal)).catch(() => ({
+    deny: 'via could not report this harness tool call.',
+  }))
+
+  on('ui.render', { component: 'ToolUse' }, (_, e, next) => (e.props.tool === world.tool ? drawCall(e.props) : next(e)))
+  // The row shows the output already.
+  on('ui.render', { component: 'ToolResult' }, (_, e, next) =>
+    e.props.tool === world.tool && !e.props.isExpanded ? { type: 'Box', children: [] } : next(e),
+  )
 
   on('turn.step', async function* ($, e, next) {
     return yield* turnStep(world, $, e, next)

@@ -1,6 +1,7 @@
-import type { Adapter, Mode } from '../adapter'
 import type { Choice } from '../../types'
-import { type Policy, relayArgv, relayEnv, relayEvents, sessionLost } from './acp'
+import { relayEvents, sessionLost } from '../acp/events'
+import { type AcpSpec, acpMode, acpStart, type Policy } from '../acp/spec'
+import type { Adapter, Mode } from '../adapter'
 
 // Read-only is a deny-by-default agent: opencode removes denied tools from what the model is offered
 // (tested live). Its own plan agent allows bash, so it is not read-only. A repository's opencode.json
@@ -26,11 +27,18 @@ const READ = {
 // Read-only is the one mode via sets and defends. Otherwise opencode runs with the person's own
 // permissions, and an `ask` among them reaches the person, except in bypass (approved) and dontAsk
 // (denied).
+export const OPENCODE: AcpSpec = {
+  name: 'opencode',
+  command: ['opencode', 'acp'],
+  steer: 'prompt',
+  modes: { readOnly: { policy: 'deny' }, bypassPermissions: { policy: 'allow' }, dontAsk: { policy: 'deny' }, default: { policy: 'ask' } },
+  // A model with variants offers opencode's `effort` config option.
+  thinking: 'effort',
+}
+
 export function opencodeRun(choice: Choice, mode: Mode, agentId: string): { agent?: string; policy: Policy } {
-  if (choice.tools === 'read' || mode === 'plan') return { agent: `via-read-${agentId}`, policy: 'deny' }
-  if (mode === 'bypassPermissions') return { policy: 'allow' }
-  if (mode === 'dontAsk') return { policy: 'deny' }
-  return { policy: 'ask' }
+  const { policy } = acpMode(OPENCODE, choice.tools === 'read', mode)
+  return choice.tools === 'read' || mode === 'plan' ? { agent: `via-read-${agentId}`, policy } : { policy }
 }
 
 const THINKING = ['minimal', 'low', 'medium', 'high', 'max'] as const
@@ -42,7 +50,6 @@ export const opencode = {
   modelExample: 'opencode/deepseek-v4.1-flash-free',
   readOnly: 'enforced',
   tools: ['read'],
-  // A model with variants offers opencode's `effort` config option.
   thinking: THINKING,
   steer: true,
   defaultModel: false,
@@ -61,17 +68,20 @@ export const opencode = {
   start: ({ choice, prompt, session, root, inbox, mode, agentId }) => {
     const run = opencodeRun(choice, mode, agentId)
     // The read agent replaces the person's own OPENCODE_CONFIG_CONTENT for a read-only run.
-    const injected: Record<string, string> = run.agent ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({ lsp: false, agent: { [run.agent]: READ } }) } : {}
-    const config = { ...(run.agent ? { mode: run.agent } : {}), ...(choice.thinking ? { effort: choice.thinking } : {}) }
-    return {
-      argv: relayArgv(root, ['opencode', 'acp']),
-      env: {
-        ...relayEnv({ inbox, steer: 'prompt', session, model: choice.model, policy: run.policy, config }),
-        ...injected,
-        ...(run.agent ? { OPENCODE_DISABLE_PROJECT_CONFIG: '1' } : {}),
-      },
-      input: prompt,
-    }
+    const injected: Record<string, string> = run.agent
+      ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({ lsp: false, agent: { [run.agent]: READ } }) }
+      : {}
+    return acpStart(OPENCODE, {
+      root,
+      prompt,
+      readOnly: choice.tools === 'read',
+      mode,
+      inbox,
+      session,
+      model: choice.model,
+      thinking: choice.thinking,
+      ...(run.agent ? { config: { mode: run.agent }, env: { ...injected, OPENCODE_DISABLE_PROJECT_CONFIG: '1' } } : {}),
+    })
   },
   events: () => relayEvents(),
   // The relay names the model the session runs on.
@@ -79,7 +89,8 @@ export const opencode = {
   failure: (_exit, stderr) =>
     sessionLost(stderr)
       ? {
-          message: "opencode could not find this agent's earlier session, so this message did not run. Send it again to start a new opencode session.",
+          message:
+            "opencode could not find this agent's earlier session, so this message did not run. Send it again to start a new opencode session.",
           sessionLost: true,
         }
       : undefined,

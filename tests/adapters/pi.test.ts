@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { arrange, expectPiSpawn, lines, ROOT, run, split, type Spawn } from '../helpers'
+import { arrange, lines, run, type Spawn, split } from '../helpers'
 
 test('a prompt starting with @ reaches pi as the message, not as a file argument', async ($, on) => {
   const spawns: Spawn[] = []
@@ -20,14 +20,21 @@ test('the session registers an agent type only for a harness on PATH', async ($,
     return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  const tools: unknown[] = []
+  on('tool.register', (_, e) => {
+    tools.push(e.name)
+    return { value: { tool: `mcp__via__${e.name}` } }
+  })
   on('agent.register', (_, e) => {
     seen.push(e.name)
+    tools.push(...(e.tools ?? []))
     return { value: { agent: `pi:${e.name}` } }
   })
   await $.session.start({ cwd: '/', surface: null, isInteractive: false })
   expect(seen).toEqual(['pi'])
+  // Its agent can call via's own tool, which reports the harness's tool calls.
+  expect(tools).toEqual(['step', 'mcp__via__step'])
 })
-
 
 test('a read-only tool list ignores the project trust-gated .pi resources; a list with a writing tool keeps them', async ($, on) => {
   const spawns: Spawn[] = []

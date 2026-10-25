@@ -4,7 +4,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { pi } from '../hooks/adapters/pi'
 import { turnStep } from '../hooks/turn'
 import type { World } from '../hooks/world'
-import { arrange, bottom, ENV, expectPiSpawn, hang, lines, ROOT, run, split, STEP, type Spawn } from './helpers'
+import { arrange, bottom, ENV, expectPiSpawn, hang, lines, ROOT, run, type Spawn, STEP, split } from './helpers'
 
 test('a pi run past the default 30 minutes is stopped with its partial answer, unsigned', async ($, on) => {
   const clock = mock.clock(on)
@@ -20,7 +20,13 @@ test('a pi run past the default 30 minutes is stopped with its partial answer, u
   expect(result.answer).toContain('half an answer')
   expect(result.answer).toContain('pi ran past 30 minutes and was stopped.')
   expect(result.answer).not.toContain('answered by pi')
-  expect(result.usage).toEqual({ model: 'openrouter/kimi', input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+  expect(result.usage).toEqual({
+    model: 'openrouter/kimi',
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  })
   expect(chunks.some((chunk) => chunk.kind === 'text' && chunk.text.includes('pi ran past 30 minutes and was stopped.'))).toBe(true)
 })
 
@@ -71,14 +77,18 @@ test('a pi agent streams pi, names its model and reports pi usage even when piec
   })
 })
 
-test('a defaultModel setting supplies --model when the prompt has no pi-model line', { options: { defaultModel: 'openrouter/kimi' } }, async ($, on) => {
-  const spawns: Spawn[] = []
-  arrange(on, spawns, split(lines))
-  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
-  await run($)
-  expectPiSpawn(spawns[0], ROOT, ['--model', 'openrouter/kimi'])
-  expect(spawns[0]?.input).toBe('go')
-})
+test(
+  'a defaultModel setting supplies --model when the prompt has no pi-model line',
+  { options: { defaultModel: 'openrouter/kimi' } },
+  async ($, on) => {
+    const spawns: Spawn[] = []
+    arrange(on, spawns, split(lines))
+    await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+    await run($)
+    expectPiSpawn(spawns[0], ROOT, ['--model', 'openrouter/kimi'])
+    expect(spawns[0]?.input).toBe('go')
+  },
+)
 
 test('a pi-model line overrides the defaultModel setting', { options: { defaultModel: 'openrouter/kimi' } }, async ($, on) => {
   const spawns: Spawn[] = []
@@ -316,6 +326,9 @@ function fakeWorld(): World {
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
+    tool: 'mcp__via__step',
+    jobs: new Map(),
+    calls: new Map(),
   }
   return world
 }
@@ -426,6 +439,7 @@ test('an auto-mode workflow agent answers in plain text', async ($, on) => {
 test('a pi that is missing answers in text, never as a Claude model', async ($, on) => {
   bottom(on)
   on('session.messages', () => ({ value: [] }))
+  // biome-ignore lint/correctness/useYield: a streaming hook must be an async generator, even one that answers at once
   on('process.spawn', async function* () {
     throw new Error('spawn pi ENOENT')
   })
@@ -439,7 +453,7 @@ test('a model call pi reports as failed is named in the answer', async ($, on) =
     { type: 'message_start', message: { role: 'assistant', provider: 'openrouter', model: 'kimi' } },
     { type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: '402: more credits needed', usage: {} } },
   ]
-  arrange(on, [], [{ stream: 'stdout', text: failed.map((e) => JSON.stringify(e)).join('\n') + '\n' }])
+  arrange(on, [], [{ stream: 'stdout', text: `${failed.map((e) => JSON.stringify(e)).join('\n')}\n` }])
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { result } = await run($)
   expect(result.answer).toContain("pi's model call failed: 402: more credits needed")
@@ -453,7 +467,7 @@ test('a retry that recovers does not read as a failed model call', async ($, on)
     { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'recovered' } },
     { type: 'message_end', message: { role: 'assistant', usage: {} } },
   ]
-  arrange(on, [], [{ stream: 'stdout', text: recovered.map((e) => JSON.stringify(e)).join('\n') + '\n' }])
+  arrange(on, [], [{ stream: 'stdout', text: `${recovered.map((e) => JSON.stringify(e)).join('\n')}\n` }])
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { result } = await run($)
   expect(result.answer).toContain('recovered')
@@ -476,13 +490,19 @@ test('only the last assistant message is the answer', async ($, on) => {
     { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'second' } },
     { type: 'message_end', message: { role: 'assistant', usage: { input: 2, output: 2 } } },
   ]
-  arrange(on, [], [{ stream: 'stdout', text: two.map((e) => JSON.stringify(e)).join('\n') + '\n' }])
+  arrange(on, [], [{ stream: 'stdout', text: `${two.map((e) => JSON.stringify(e)).join('\n')}\n` }])
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { result } = await run($)
   expect(result.answer).toBe('second\n\n— answered by pi, openrouter/kimi-2')
   expect(result.answer).not.toContain('first')
   // The last model call alone: 2 in, 2 out, not the run's 3 and 3.
-  expect(result.usage).toEqual({ model: 'openrouter/kimi-2', input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+  expect(result.usage).toEqual({
+    model: 'openrouter/kimi-2',
+    input_tokens: 2,
+    output_tokens: 2,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  })
 })
 
 test('two usage events report only the last model call', async ($, on) => {
@@ -494,10 +514,16 @@ test('two usage events report only the last model call', async ($, on) => {
     { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'second' } },
     { type: 'message_end', message: { role: 'assistant', usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 } } },
   ]
-  arrange(on, [], [{ stream: 'stdout', text: two.map((e) => JSON.stringify(e)).join('\n') + '\n' }])
+  arrange(on, [], [{ stream: 'stdout', text: `${two.map((e) => JSON.stringify(e)).join('\n')}\n` }])
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { result } = await run($)
-  expect(result.usage).toEqual({ model: 'openrouter/kimi', input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 })
+  expect(result.usage).toEqual({
+    model: 'openrouter/kimi',
+    input_tokens: 1,
+    output_tokens: 2,
+    cache_read_input_tokens: 3,
+    cache_creation_input_tokens: 4,
+  })
 })
 
 test('a choice line is stored under via.agents', async ($, on) => {
@@ -525,7 +551,7 @@ test('a model line never signs for pi: a stream that names no model says so', as
     { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'all done' } },
     { type: 'message_end', message: { role: 'assistant', usage: { input: 3, output: 4 } } },
   ]
-  arrange(on, spawns, [{ stream: 'stdout', text: unnamed.map((e) => JSON.stringify(e)).join('\n') + '\n' }])
+  arrange(on, spawns, [{ stream: 'stdout', text: `${unnamed.map((e) => JSON.stringify(e)).join('\n')}\n` }])
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'model: openrouter/*kimi*\ngo' })
   const { result } = await run($)
   expect(result.answer).toBe('all done\n\n— answered by pi, model not reported')
@@ -539,6 +565,7 @@ test('an agent that is not a via agent is looked up once, not on every step', as
     lists += 1
     return { value: [{ id: 'x1', description: 'x', type: 'Explore', status: 'running' }] }
   })
+  // biome-ignore lint/correctness/useYield: a streaming hook must be an async generator, even one that answers at once
   on('turn.step', async function* () {
     return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
   })
@@ -556,7 +583,7 @@ test('plan mode runs pi with only its reading tools, which also skips the projec
   expect(spawns[0]?.argv).toEqual(expect.arrayContaining(['--tools', 'read,grep,find,ls', '-na']))
 })
 
-test("plan mode overrides a pi tools line that could write, so pi still gets only its reading tools", async ($, on) => {
+test('plan mode overrides a pi tools line that could write, so pi still gets only its reading tools', async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns, split(lines))
   on('state.get', (_, e, next) => (e.key === 'modes' ? { value: { value: 'plan', version: 1 } } : next(e)))

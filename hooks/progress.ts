@@ -1,5 +1,6 @@
-// Harness tools reach Claude Code as text, not tool calls, so its concise view counts none.
-// Claude Code's subagentStatusLine draws the latest step from the row files run.ts writes.
+// pi's and agy's tool calls reach Claude Code as text lines, not tool calls (Codex's and OpenCode's are
+// calls to the step tool: hooks/acp/steps.ts), so for them Claude Code's subagentStatusLine draws the
+// latest one from the row files run.ts writes.
 export type Activity = { readonly step: string; readonly tools: number }
 
 // A harness names its own tools: control characters (escape sequences) never reach the terminal.

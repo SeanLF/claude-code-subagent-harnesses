@@ -2,13 +2,17 @@
   "private": true,
   "packageManager": "pnpm@12.15.0",
   "scripts": {
-    "typecheck": "tsc -p . && tsc -p pi-extension && tsc -p relay",
+    "typecheck": "tsc -b . pi-extension relay",
     "test": "claude plugin test . < /dev/null",
     "validate": "claude plugin validate --strict . < /dev/null",
-    "build:relay": "esbuild relay/src/relay.mts --bundle --platform=node --format=esm --target=node22 --legal-comments=inline --outfile=relay/relay.mjs --banner:js='// Built from relay/src/relay.mts by pnpm build:relay; do not edit.'"
+    "build:relay": "esbuild relay/src/relay.mts --bundle --platform=node --format=esm --target=node22 --legal-comments=inline --outfile=relay/relay.mjs --banner:js='// Built from relay/src/relay.mts by pnpm build:relay; do not edit.'",
+    "lint": "biome ci .",
+    "format": "biome check --write .",
+    "test:relay": "node --test relay/test/"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "2.0.2",
+    "@biomejs/biome": "2.6.2",
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@openai/codex-sdk": "0.163.0",
     "@opencode-ai/sdk": "1.19.4",

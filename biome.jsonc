@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    // Not release-please's manifest: it rewrites that in its own style at every release.
+    "includes": [
+      "hooks/**",
+      "tests/**",
+      "pi-extension/**",
+      "relay/src/**",
+      "relay/test/**",
+      "types/**",
+      "*.json",
+      "relay/*.json",
+      "!.release-please-manifest.json"
+    ]
+  },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 140 },
+  "javascript": {
+    "formatter": { "quoteStyle": "single", "semicolons": "asNeeded", "trailingCommas": "all", "arrowParentheses": "always" }
+  },
+  "linter": { "enabled": true },
+  "overrides": [
+    {
+      // These strip control, bidirectional and zero-width characters, so their patterns name them.
+      "includes": ["hooks/acp/text.ts", "hooks/progress.ts", "hooks/run.ts", "tests/progress.test.ts"],
+      "linter": { "rules": { "suspicious": { "noControlCharactersInRegex": "off", "noMisleadingCharacterClass": "off" } } }
+    },
+    {
+      "includes": ["hooks/acp/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  { "group": ["../*"], "message": "hooks/acp is the generic ACP client: it imports only 'claude-code' and its own files." }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

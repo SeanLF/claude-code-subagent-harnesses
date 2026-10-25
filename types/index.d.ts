@@ -5,6 +5,13 @@ export type Choice = {
 }
 declare module 'claude-code' {
   interface PluginState {
-    via: { agents: StateFamily<Choice>; sessions: StateFamily<string>; handbacks: StateFamily<boolean>; reports: StateFamily<string>; handedBack: StateFamily<boolean>; modes: StateFamily<string> }
+    via: {
+      agents: StateFamily<Choice>
+      sessions: StateFamily<string>
+      handbacks: StateFamily<boolean>
+      reports: StateFamily<string>
+      handedBack: StateFamily<boolean>
+      modes: StateFamily<string>
+    }
   }
 }
