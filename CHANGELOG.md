@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.4.1...via-v0.5.0) (2026-10-25)
+
+
+### Features
+
+* harness tool calls fold into one line, as Claude Code folds its own ([1bebbab](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/1bebbab001b9258a6b866892c09c4282a3705677))
+
 ## [0.4.1](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.4.0...via-v0.4.1) (2026-10-25)
 
 
