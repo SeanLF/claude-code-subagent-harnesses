@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.3.0...via-v0.4.0) (2026-10-25)
+
+
+### Features
+
+* Codex and OpenCode subagents show native tool rows, Claude Code's own summary, command output, diffs and images ([c36a2e0](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/c36a2e0ecc1c5fd58b2d5c22ddb2212890a39883))
+
 ## [0.3.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.2.1...via-v0.3.0) (2026-10-24)
 
 
