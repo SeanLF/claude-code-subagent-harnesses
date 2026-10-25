@@ -21,10 +21,6 @@ test('the session registers an agent type only for a harness on PATH', async ($,
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   const tools: unknown[] = []
-  on('tool.register', (_, e) => {
-    tools.push(e.name)
-    return { value: { tool: `mcp__via__${e.name}` } }
-  })
   on('agent.register', (_, e) => {
     seen.push(e.name)
     tools.push(...(e.tools ?? []))
@@ -32,8 +28,8 @@ test('the session registers an agent type only for a harness on PATH', async ($,
   })
   await $.session.start({ cwd: '/', surface: null, isInteractive: false })
   expect(seen).toEqual(['pi'])
-  // Its agent can call via's own tool, which reports the harness's tool calls.
-  expect(tools).toEqual(['step', 'mcp__via__step'])
+  // Its agent can call the tool of via's step server, which reports the harness's tool calls.
+  expect(tools).toEqual(['mcp__plugin_via_step__step'])
 })
 
 test('a read-only tool list ignores the project trust-gated .pi resources; a list with a writing tool keeps them', async ($, on) => {
@@ -45,4 +41,13 @@ test('a read-only tool list ignores the project trust-gated .pi resources; a lis
   await $.turn.start({ turnId: 't2', agentId: 'a1', text: 'tools: read,bash\ngo' })
   await run($, { turnId: 't2', index: 0, model: 'haiku', messageCount: 2, agentId: 'a1' })
   expect(spawns[1]?.argv.slice(-2)).toEqual(['--tools', 'read,bash'])
+})
+
+test('pi needs a current Node too, for the step server, and says so instead of running', async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns, split(lines), 0, [], undefined, '20.19.0\n')
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const { result } = await run($)
+  expect(spawns).toHaveLength(0)
+  expect(result.answer).toContain('via needs Node 22.18 or later on PATH to run pi, not 20.19.0')
 })

@@ -2,13 +2,14 @@
   "private": true,
   "packageManager": "pnpm@12.15.0",
   "scripts": {
-    "typecheck": "tsc -b . pi-extension relay",
+    "typecheck": "tsc -b . pi-extension relay mcp",
     "test": "claude plugin test . < /dev/null",
     "validate": "claude plugin validate --strict . < /dev/null",
     "build:relay": "esbuild relay/src/relay.mts --bundle --platform=node --format=esm --target=node22 --legal-comments=inline --outfile=relay/relay.mjs --banner:js='// Built from relay/src/relay.mts by pnpm build:relay; do not edit.'",
     "lint": "biome ci .",
     "format": "biome check --write .",
-    "test:relay": "node --test relay/test/"
+    "test:relay": "node --test relay/test/",
+    "test:mcp": "node --test mcp/test/"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "2.0.2",

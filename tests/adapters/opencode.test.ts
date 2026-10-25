@@ -197,7 +197,7 @@ test('an aborted run saves a session id in an unterminated tail without showing 
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
-    tool: 'mcp__via__step',
+    tool: 'mcp__plugin_via_step__step',
     jobs: new Map(),
     calls: new Map(),
   }
@@ -307,13 +307,13 @@ test("opencode's command ends the step with a call to via's tool, which the next
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const first = await run($)
   expect(first.result.stopReason).toBe('tool_use')
-  expect(first.result.toolUses).toEqual([{ name: 'mcp__via__step', input: { kind: 'execute', title: 'echo hi > asked.txt' } }])
+  expect(first.result.toolUses).toEqual([{ name: 'mcp__plugin_via_step__step', input: { kind: 'execute', title: 'echo hi > asked.txt' } }])
   const tool = first.chunks.find((c) => c.kind === 'tool')
   if (tool?.kind !== 'tool') throw new Error('no tool chunk')
   // Each step numbers its blocks from 0.
   expect(Math.min(...first.chunks.flatMap((c) => ('index' in c ? [c.index] : [])))).toBe(0)
   const answered = await $.tool.call({
-    tool: 'mcp__via__step',
+    tool: 'mcp__plugin_via_step__step',
     tool_use_id: tool.id,
     kind: 'execute',
     title: 'echo hi > asked.txt',
@@ -327,7 +327,12 @@ test("opencode's command ends the step with a call to via's tool, which the next
 test("a call to via's tool that no harness made is refused and runs nothing", async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns)
-  const answered = await $.tool.call({ tool: 'mcp__via__step', tool_use_id: 'toolu_made_up', kind: 'execute', title: 'rm -rf /' } as never)
+  const answered = await $.tool.call({
+    tool: 'mcp__plugin_via_step__step',
+    tool_use_id: 'toolu_made_up',
+    kind: 'execute',
+    title: 'rm -rf /',
+  } as never)
   expect(answered).toHaveProperty('deny')
   expect(spawns).toHaveLength(0)
 })

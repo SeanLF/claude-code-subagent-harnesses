@@ -1,0 +1,10 @@
+{
+  "//": "Claude Code starts this server under Node, which strips its types; it bundles nothing.",
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"]
+  },
+  "include": ["."]
+}

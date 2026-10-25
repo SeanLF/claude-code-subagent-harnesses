@@ -4,7 +4,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { pi } from '../hooks/adapters/pi'
 import { turnStep } from '../hooks/turn'
 import type { World } from '../hooks/world'
-import { arrange, bottom, ENV, expectPiSpawn, hang, lines, ROOT, run, type Spawn, STEP, split } from './helpers'
+import { arrange, bottom, ENV, expectPiSpawn, hang, lines, NODE, node, ROOT, run, type Spawn, STEP, split } from './helpers'
 
 test('a pi run past the default 30 minutes is stopped with its partial answer, unsigned', async ($, on) => {
   const clock = mock.clock(on)
@@ -150,6 +150,7 @@ test('a spawn teaches the harness before agent.list catches up', async ($, on) =
   const spawns: Spawn[] = []
   mock.env(on, { TMPDIR: '/tmp', HOME: '/home/u' })
   on('agent.list', () => ({ value: [] }))
+  node(on)
   on('fs.write', () => ({ value: undefined }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_, e, next) => next(e))
@@ -326,7 +327,7 @@ function fakeWorld(): World {
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
-    tool: 'mcp__via__step',
+    tool: 'mcp__plugin_via_step__step',
     jobs: new Map(),
     calls: new Map(),
   }
@@ -347,6 +348,7 @@ test('an aborted follow-up leaves no report for a step with no turn to repeat', 
     fs: { write: async () => undefined },
     clock: { after: () => ({ cancel: () => {} }) },
     process: {
+      run: async () => NODE,
       spawn: () => {
         runs += 1
         const child = (async function* () {

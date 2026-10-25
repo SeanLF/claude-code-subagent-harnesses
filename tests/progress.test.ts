@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { drawCall, NO_OUTPUT } from '../hooks/acp/render'
+import { drawCall, drawGroup, NO_OUTPUT } from '../hooks/acp/render'
 import { pi } from '../hooks/adapters/pi'
 import { stepOf } from '../hooks/progress'
 import { run as runHook } from '../hooks/run'
@@ -115,7 +115,7 @@ test('an aborted run clears its agent-panel row', async () => {
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
-    tool: 'mcp__via__step',
+    tool: 'mcp__plugin_via_step__step',
     jobs: new Map(),
     calls: new Map(),
   }
@@ -210,7 +210,7 @@ test('a step drops control characters, so a harness tool name cannot send escape
 
 const call = (over: Partial<Parameters<typeof drawCall>[0]>): Parameters<typeof drawCall>[0] => ({
   tool_use_id: 't',
-  tool: 'mcp__via__step',
+  tool: 'mcp__plugin_via_step__step',
   input: { kind: 'execute', title: 'npm test' },
   isRunning: false,
   isErrored: false,
@@ -277,4 +277,25 @@ test('a call that names a file links its title to it', () => {
   expect(odd).toContain('file:///my%20repo/%231.ts')
   expect(JSON.stringify(drawCall(call({ input: { kind: 'read', title: 'x', path: '/a/what?.ts' } })))).toContain('file:///a/what%3F.ts')
   expect(JSON.stringify(drawCall(call({ input: { kind: 'read', title: 'x', path: 'rel/a.ts' } })))).not.toContain('Link')
+})
+
+const group = (kinds: unknown[], isActive = false): Parameters<typeof drawGroup>[0] => ({
+  calls: kinds.map((kind) => ({
+    tool: 'mcp__plugin_via_step__step',
+    input: { kind, title: 'x' },
+    isRunning: false,
+    isErrored: false,
+    isInterrupted: false,
+  })),
+  isActive,
+  isExpanded: false,
+  isCallsOnly: true,
+})
+
+test('a folded run of harness calls is counted by what each did, in the order each kind first came', () => {
+  expect(texts(drawGroup(group(['read', 'read', 'search']))).join('')).toBe('Read 2 files, searched 1 pattern')
+  expect(texts(drawGroup(group(['execute', 'read', 'execute']))).join('')).toBe('Ran 2 commands, read 1 file')
+  expect(texts(drawGroup(group(['read'], true))).join('')).toBe('Reading 1 file…')
+  // A kind ACP adds later, or none at all, still counts.
+  expect(texts(drawGroup(group(['think', undefined]))).join('')).toBe('2 other steps')
 })

@@ -66,23 +66,23 @@ async function probeModel($: Parameters<StepHook>[0], adapter: Adapter, choice: 
   return asked?.exitCode === 0 ? adapter.probe.model(asked.stdout) : undefined
 }
 
-// Type stripping, which runs relay/relay.mjs as is, is on by default from Node 22.18.
+// Type stripping, which runs relay/relay.mjs and mcp/step.mts as is, is on by default from Node 22.18.
 const nodeOk = (version: string) => {
   const [major = 0, minor = 0] = version.split('.').map(Number)
   return major > 22 || (major === 22 && minor >= 18)
 }
 
-// The relay needs Node; an ACP adapter that installs needs its pinned copy, installed once. A string
-// says why the run cannot start.
+// Every harness needs Node, for the step server that reports its tool calls, and the relay too; an ACP
+// adapter that installs needs its pinned copy, installed once. A string says why the run cannot start.
 async function relayReady(w: World, $: Parameters<StepHook>[0], adapter: Adapter): Promise<{ installed?: string } | string> {
-  if (!adapter.relay) return {}
   w.node ??= $.process.run(['node', '-p', 'process.versions.node'], { timeoutMs: 15_000 }).then(
     (r) => (r.exitCode === 0 ? r.stdout.trim() : undefined),
     () => undefined,
   )
   const version = await w.node
   if (!version || !nodeOk(version))
-    return `${adapter.name} runs through via's relay, which needs Node 22.18 or later on PATH${version ? `, not ${version}` : ''}. Install a current Node LTS and restart Claude Code.`
+    return `via needs Node 22.18 or later on PATH to run ${adapter.name}${version ? `, not ${version}` : ''}. Install a current Node LTS and restart Claude Code.`
+  if (!adapter.relay) return {}
   const install = adapter.relay.install
   if (!install) return {}
   const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))

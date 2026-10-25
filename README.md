@@ -42,7 +42,7 @@ Each of Codex's tool calls is a row of its own, `Running` while it runs, and the
 
 ## Set up
 
-1. **Install a harness and sign in to it**: [Codex](https://github.com/openai/codex), [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), [OpenCode](https://opencode.ai) or [pi](https://pi.dev). Any one is enough. Codex and OpenCode also need [Node](https://nodejs.org) 22.18 or later, with npm.
+1. **Install a harness and sign in to it**: [Codex](https://github.com/openai/codex), [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), [OpenCode](https://opencode.ai) or [pi](https://pi.dev). Any one is enough. via needs [Node](https://nodejs.org) 22.18 or later, and Codex and OpenCode also need npm.
 2. **Install the plugin** in Claude Code:
 
    ```

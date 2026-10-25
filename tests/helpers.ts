@@ -46,7 +46,7 @@ export async function runTurn($: TestDollar, step: typeof STEP = STEP) {
     const done = await run($, { ...step, index })
     chunks.push(...done.chunks)
     const tool = done.chunks.find((c) => c.kind === 'tool')
-    if (done.result.stopReason !== 'tool_use' || tool?.kind !== 'tool' || tool.name !== 'mcp__via__step')
+    if (done.result.stopReason !== 'tool_use' || tool?.kind !== 'tool' || tool.name !== 'mcp__plugin_via_step__step')
       return { chunks, result: done.result, calls }
     const input = done.chunks.find((c) => c.kind === 'input')
     const args = input?.kind === 'input' ? (JSON.parse(input.json) as Record<string, unknown>) : {}
@@ -61,7 +61,7 @@ export function expectPiSpawn(spawn: Spawn | undefined, root: string, extra: str
 
 export const ENV = { TMPDIR: '/tmp', HOME: '/home/u' }
 
-export function bottom(on: TestOn, writes?: Write[] | 'reject', env: Record<string, string> = ENV) {
+export function bottom(on: TestOn, writes?: Write[] | 'reject', env: Record<string, string> = ENV, version = NODE.stdout) {
   mock.env(on, env)
   on('agent.list', () => ({ value: [AGENT] }))
   on('fs.write', (_, e) => {
@@ -71,6 +71,13 @@ export function bottom(on: TestOn, writes?: Write[] | 'reject', env: Record<stri
   })
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_, e, next) => next(e))
+  node(on, version)
+}
+
+// Every harness checks Node first, for the step server: a current one, and anything else run passes on.
+export const NODE = { exitCode: 0, stdout: '26.12.1\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+export function node(on: TestOn, version = NODE.stdout) {
+  on('process.run', (_, e, next) => (e.argv[0] === 'node' ? { value: { ...NODE, stdout: version } } : next(e)))
 }
 
 export function arrange(
@@ -80,8 +87,9 @@ export function arrange(
   code = 0,
   rows: SessionMessage[] = [],
   writes?: Write[] | 'reject',
+  version = NODE.stdout,
 ) {
-  bottom(on, writes)
+  bottom(on, writes, ENV, version)
   on('session.messages', () => ({ value: rows }))
   on('process.spawn', async function* (_, e) {
     spawns.push({ argv: [...e.argv], input: e.input, env: e.env })

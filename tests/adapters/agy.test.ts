@@ -65,6 +65,8 @@ function arrange(
   on('turn.complete', (_, e, next) => next(e))
   on('session.messages', () => ({ value: [] }))
   on('process.run', (_, e) => {
+    if (e.argv[0] === 'node')
+      return { value: { exitCode: 0, stdout: '26.12.1\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     probes.push([...e.argv])
     if (probe === 'reject') throw new Error('timed out after 15000 ms')
     return { value: { exitCode: probe.exitCode, stdout: probe.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -296,7 +298,9 @@ test('the model probe runs alongside the run, not before it', async ($, on) => {
   on('turn.complete', (_, e, next) => next(e))
   on('session.messages', () => ({ value: [] }))
   // Answers only once the run has started: awaiting the probe first would never finish.
-  on('process.run', async () => {
+  on('process.run', async (_, e) => {
+    if (e.argv[0] === 'node')
+      return { value: { exitCode: 0, stdout: '26.12.1\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     await started
     return { value: { exitCode: 0, stdout: MODEL, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })

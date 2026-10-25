@@ -5,6 +5,7 @@
     // Not release-please's manifest: it rewrites that in its own style at every release.
     "includes": [
       "hooks/**",
+      "mcp/**",
       "tests/**",
       "pi-extension/**",
       "relay/src/**",

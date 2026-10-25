@@ -435,7 +435,7 @@ test('a Node older than 22.18 refuses the run in plain words', async ($, on) => 
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { result } = await runTurn($)
   expect(spawns).toHaveLength(0)
-  expect(result.answer).toContain('needs Node 22.18 or later on PATH, not 22.17.1')
+  expect(result.answer).toContain('via needs Node 22.18 or later on PATH to run codex, not 22.17.1')
 })
 
 test("read-only is refused under a project's .codex folder, whose config codex-acp would load as trusted", async ($, on) => {

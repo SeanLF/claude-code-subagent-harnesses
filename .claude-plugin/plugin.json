@@ -30,5 +30,13 @@
       ],
       "default": "pinned"
     }
+  },
+  "mcpServers": {
+    "step": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/mcp/step.mts"
+      ]
+    }
   }
 }

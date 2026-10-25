@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { drawCall } from './acp/render'
+import { drawCall, drawGroup } from './acp/render'
 import { answerCall, endJob } from './acp/steps'
 import type { Adapter } from './adapter'
 import { HARNESSES } from './harnesses'
@@ -61,6 +61,9 @@ export function unwrapped(text: string): string {
   return inner.length > 0 ? inner.join('\n\n') : text
 }
 
+// The tool of the server plugin.json declares as `step`, named as Claude Code names a plugin's server.
+const STEP = 'mcp__plugin_via_step__step'
+
 export const register: Register = (on, options) => {
   const asked = options.timeoutMinutes
   const world: World = {
@@ -78,24 +81,15 @@ export const register: Register = (on, options) => {
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
-    tool: 'mcp__via__step',
+    tool: STEP,
     jobs: new Map(),
     calls: new Map(),
   }
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    // Each harness tool call reaches Claude Code as a call to this tool, which runs nothing: its
-    // tool.call hook answers with what the harness reported. Bash would look the same, but a hook
-    // that fails is skipped and the real command would run; a call to this tool nobody answers fails.
-    world.tool = (
-      await $.tool.register({
-        name: 'step',
-        description:
-          "One step of this agent's work, already done: kind is what it did (execute, read, edit, search, fetch), title what it acted on. Calling it does nothing.",
-        inputSchema: { type: 'object', properties: { kind: { type: 'string' }, title: { type: 'string' } } },
-        isDeferred: true,
-      })
-    ).tool
+    // Each harness tool call reaches Claude Code as a call to this tool, served by mcp/step.mts, which
+    // runs nothing: its tool.call hook answers with what the harness reported. Bash would look the same,
+    // but a hook that fails is skipped and the real command would run; a call nobody answers fails.
     for (const adapter of world.adapters.values()) {
       if (!(await onPath($, adapter.bin))) continue
       await $.agent.register({
@@ -152,16 +146,20 @@ export const register: Register = (on, options) => {
   if (HARNESSES.some((adapter) => adapter.steer))
     on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => sendMessage(world, $, e, next))
 
-  // The matcher's type names only built-in tools; a registered tool's full name is accepted at run time.
-  on('tool.call', { tool: 'mcp__via__step' as 'Bash' }, (_, e, next) => answerCall(world, e.tool_use_id, next.signal)).catch(() => ({
+  // The matcher's type names only built-in tools; an MCP tool's full name is accepted at run time.
+  on('tool.call', { tool: STEP as 'Bash' }, (_, e, next) => answerCall(world, e.tool_use_id, next.signal)).catch(() => ({
     deny: 'via could not report this harness tool call.',
   }))
 
   on('ui.render', { component: 'ToolUse' }, (_, e, next) => (e.props.tool === world.tool ? drawCall(e.props) : next(e)))
-  // The row shows the output already.
-  on('ui.render', { component: 'ToolResult' }, (_, e, next) =>
-    e.props.tool === world.tool && !e.props.isExpanded ? { type: 'Box', children: [] } : next(e),
+  // Claude Code decides which calls fold; via only counts them, and only a run of its own calls alone.
+  on('ui.render', { component: 'ToolGroup' }, (_, e, next) =>
+    !e.props.isExpanded && e.props.isCallsOnly === true && e.props.calls.every((call) => call.tool === world.tool)
+      ? drawGroup(e.props)
+      : next(e),
   )
+  // The row shows the output already, all of it when expanded.
+  on('ui.render', { component: 'ToolResult' }, (_, e, next) => (e.props.tool === world.tool ? { type: 'Box', children: [] } : next(e)))
 
   on('turn.step', async function* ($, e, next) {
     return yield* turnStep(world, $, e, next)
