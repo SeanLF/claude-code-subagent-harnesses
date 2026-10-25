@@ -5,6 +5,7 @@ import { codex } from '../hooks/adapters/codex'
 import { opencode } from '../hooks/adapters/opencode'
 import { pi } from '../hooks/adapters/pi'
 import { descriptionOf, helpOf, promptOf } from '../hooks/prompt'
+import { unwrapped } from '../hooks/register'
 
 const HELP = helpOf(pi)
 
@@ -251,4 +252,34 @@ test('a model line starting with - is refused, so it can never be read as a flag
   expect(promptOf('model: --dangerously-skip-permissions\ngo', pi).error).toBeDefined()
   expect(promptOf('model: openrouter/x-y\ngo', pi).error).toBeUndefined()
   expect(promptOf('tools: -bash,read\ngo', pi).error).toBeUndefined()
+})
+
+test("a teammate's wrapped message reaches the harness unwrapped, its prompt lines read from the top", async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns, split(lines))
+  const text = '<teammate-message teammate_id="team-lead" summary="x">\nmodel: openrouter/kimi\nlist files\n</teammate-message>'
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text })
+  await run($)
+  expectPiSpawn(spawns[0], ROOT, ['--model', 'openrouter/kimi'])
+  expect(spawns[0]?.input).toBe('list files')
+})
+
+test('two wrapped teammate messages become one prompt; text around an envelope is left as written', () => {
+  const two =
+    '<teammate-message teammate_id="a">\nfirst\n</teammate-message>\n<teammate-message teammate_id="b">\nsecond\n</teammate-message>'
+  expect(unwrapped(two)).toBe('first\n\nsecond')
+  const mixed = 'see <teammate-message teammate_id="a">x</teammate-message> here'
+  expect(unwrapped(mixed)).toBe(mixed)
+})
+
+test("an envelope's quoted > and CRLF lines stay out of the task, and unclosed openers cost linear time", () => {
+  expect(unwrapped('<teammate-message summary="a > b">\nmodel: x\ngo\n</teammate-message>')).toBe('model: x\ngo')
+  expect(unwrapped('<teammate-message teammate_id="a">\r\nmodel: x\r\ngo\r\n</teammate-message>')).toBe('model: x\r\ngo')
+  const unclosed = '<teammate-message a="1">x'.repeat(50_000)
+  const started = performance.now()
+  expect(unwrapped(unclosed)).toBe(unclosed)
+  expect(performance.now() - started).toBeLessThan(1000)
+  // Nested or stray envelopes are not unwrapped at all.
+  const nested = '<teammate-message a="1"><teammate-message b="2">x</teammate-message></teammate-message>'
+  expect(unwrapped(nested)).toBe(nested)
 })

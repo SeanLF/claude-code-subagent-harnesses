@@ -26,6 +26,41 @@ async function onPath($: Pick<EngineInterface, 'env' | 'fs'>, bin: string): Prom
   return found.includes(true)
 }
 
+// A teammate's messages arrive wrapped (<teammate-message teammate_id=… summary=…>task</teammate-message>):
+// the harness gets the task alone, so its prompt lines (model:, tools:) are read from its top.
+// Only a message that is nothing but envelopes is unwrapped. One linear pass: an attribute may hold a
+// quoted >, and a message full of unclosed openers must not cost quadratic time.
+const OPEN = '<teammate-message'
+const CLOSE = '</teammate-message>'
+export function unwrapped(text: string): string {
+  const inner: string[] = []
+  let at = 0
+  for (;;) {
+    while (at < text.length && /\s/.test(text[at] as string)) at += 1
+    if (at === text.length) break
+    if (!text.startsWith(OPEN, at) || !/[\s>]/.test(text[at + OPEN.length] ?? '')) return text
+    // The opening tag ends at the first > outside quotes.
+    let quote = ''
+    let end = at + OPEN.length
+    for (; end < text.length; end += 1) {
+      const c = text[end] as string
+      if (quote) quote = c === quote ? '' : quote
+      else if (c === '"' || c === "'") quote = c
+      else if (c === '>') break
+    }
+    const close = text.indexOf(CLOSE, end + 1)
+    if (end >= text.length || close < 0) return text
+    inner.push(
+      text
+        .slice(end + 1, close)
+        .replace(/^\r?\n/, '')
+        .replace(/\r?\n$/, ''),
+    )
+    at = close + CLOSE.length
+  }
+  return inner.length > 0 ? inner.join('\n\n') : text
+}
+
 export const register: Register = (on, options) => {
   const asked = options.timeoutMinutes
   const world: World = {
@@ -101,7 +136,7 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async (_, e, next) => {
     if (e.agentId !== undefined) {
-      const prompt = e.text || world.seeds.get(e.agentId)
+      const prompt = unwrapped(e.text) || world.seeds.get(e.agentId)
       world.seeds.delete(e.agentId)
       if (prompt) world.turns.set(e.turnId, { prompt, delivered: false })
     }

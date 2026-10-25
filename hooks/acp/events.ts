@@ -1,3 +1,4 @@
+import type { SessionUpdate, ToolCallContent } from '@agentclientprotocol/sdk'
 import { isRecord } from './json'
 import type { Ask, Norm } from './norm'
 
@@ -36,11 +37,12 @@ function diffOf(path: string, oldText: string, newText: string): string {
 // What a finished tool call returned, as the agent reported it: its text content, a diff of each file
 // it edited, or its raw output. An exit code alone is not output (codex-acp reports one there): the
 // parser keeps it apart. Kept short: it lands in the subagent's transcript.
-function outputOf(u: Record<string, unknown>, cwd: string): string {
+function outputOf(u: { content?: ToolCallContent[] | null; rawOutput?: unknown }, cwd: string): string {
   const parts: string[] = []
   for (const item of Array.isArray(u.content) ? u.content.filter(isRecord) : []) {
-    const inner = item.content
-    if (item.type === 'content' && isRecord(inner) && typeof inner.text === 'string') parts.push(inner.text)
+    // Typed, but still an agent's JSON: a content item can come without its content.
+    if (item.type === 'content' && isRecord(item.content) && item.content.type === 'text' && typeof item.content.text === 'string')
+      parts.push(item.content.text)
     else if (item.type === 'diff' && typeof item.path === 'string' && typeof item.newText === 'string')
       parts.push(diffOf(relative(item.path, cwd), typeof item.oldText === 'string' ? item.oldText : '', item.newText))
   }
@@ -125,8 +127,10 @@ export function relayEvents(): (line: string) => Norm[] {
       default:
         return []
     }
-    const u = e.update
-    if (!live || !isRecord(u)) return []
+    // The agent's JSON, read through the SDK's types: a field the protocol renames fails the type check
+    // here. Its values are still checked, as anything a process prints is.
+    if (!live || !isRecord(e.update) || typeof e.update.sessionUpdate !== 'string') return []
+    const u = e.update as SessionUpdate
     switch (u.sessionUpdate) {
       case 'agent_message_chunk': {
         const content = u.content
@@ -145,7 +149,9 @@ export function relayEvents(): (line: string) => Norm[] {
       }
       case 'agent_thought_chunk': {
         const content = u.content
-        return isRecord(content) && typeof content.text === 'string' && content.text ? [{ k: 'thinking', t: content.text }] : []
+        return isRecord(content) && content.type === 'text' && typeof content.text === 'string' && content.text
+          ? [{ k: 'thinking', t: content.text }]
+          : []
       }
       case 'tool_call':
       case 'tool_call_update': {
@@ -153,13 +159,13 @@ export function relayEvents(): (line: string) => Norm[] {
         const id = u.toolCallId
         if (typeof u.title === 'string') titles.set(id, u.title)
         if (typeof u.kind === 'string') kinds.set(id, u.kind)
-        const where = Array.isArray(u.locations) ? u.locations.find(isRecord) : undefined
+        const where = Array.isArray(u.locations) ? u.locations.find((l) => isRecord(l)) : undefined
         if (typeof where?.path === 'string') paths.set(id, where.path)
         const meta = isRecord(u._meta) ? u._meta : {}
         const delta = isRecord(meta.terminal_output_delta) ? meta.terminal_output_delta.data : undefined
         // The end of a long output is kept: that is where an error usually is.
         if (typeof delta === 'string') printed.set(id, tail((printed.get(id) ?? '') + delta, 2000))
-        const raw = isRecord(u.rawOutput) ? u.rawOutput.exit_code : undefined
+        const raw = isRecord(u.rawOutput) ? (u.rawOutput as Record<string, unknown>).exit_code : undefined
         const exit = isRecord(meta.terminal_exit) ? meta.terminal_exit.exit_code : raw
         if (typeof exit === 'number') exits.set(id, exit)
         const now = Array.isArray(u.content) && u.content.length > 0 ? outputOf(u, cwd) : ''
@@ -195,7 +201,7 @@ export function relayEvents(): (line: string) => Norm[] {
         return out
       }
       case 'plan': {
-        const entries = (Array.isArray(u.entries) ? u.entries.filter(isRecord) : []).flatMap((entry) =>
+        const entries = (Array.isArray(u.entries) ? u.entries.filter((entry) => isRecord(entry)) : []).flatMap((entry) =>
           typeof entry.content === 'string'
             ? [{ content: entry.content, status: typeof entry.status === 'string' ? entry.status : 'pending' }]
             : [],

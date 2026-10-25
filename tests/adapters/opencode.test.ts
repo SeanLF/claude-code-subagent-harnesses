@@ -462,3 +462,16 @@ test('a diff to or from an empty file has no blank changed line', () => {
   )
   expect(done.at(-1)).toEqual({ k: 'called', id: 'd', output: 'gone.txt\n- a', failed: false })
 })
+
+test('malformed tool content from an agent is skipped, not a crash', () => {
+  const parse = relayEvents()
+  parse(JSON.stringify({ relay: 'steered' }))
+  const content = [{ type: 'content' }, { type: 'content', content: null }, { type: 'content', content: { type: 'text', text: 'ok' } }]
+  const done = parse(
+    JSON.stringify({
+      sessionId: SID,
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'm', status: 'completed', kind: 'read', title: 'r', content },
+    }),
+  )
+  expect(done.at(-1)).toEqual({ k: 'called', id: 'm', output: 'ok', failed: false })
+})
