@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.4.0...via-v0.4.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* via agents work in team mode, and the ACP parser is typed against the SDK and skips malformed content ([2253f86](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/2253f86dbe2e62be0f1f785f4ae9c91f7b6f0252))
+
 ## [0.4.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.3.0...via-v0.4.0) (2026-10-25)
 
 
