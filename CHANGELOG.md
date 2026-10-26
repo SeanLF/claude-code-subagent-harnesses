@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.5.0...via-v0.5.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* Esc on a via agent stops its harness, not only the wait ([3ccfd8a](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/3ccfd8a7e393cc2006191e2a22af352ef940f593)), closes [#9](https://github.com/SeanLF/claude-code-subagent-harnesses/issues/9)
+* the relay declares no plan capability, so a Codex markdown plan shows as text ([f97a9b7](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/f97a9b741d98d7620635b247763c0cdd741d4ce7)), closes [#13](https://github.com/SeanLF/claude-code-subagent-harnesses/issues/13)
+
 ## [0.5.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.4.1...via-v0.5.0) (2026-10-25)
 
 
