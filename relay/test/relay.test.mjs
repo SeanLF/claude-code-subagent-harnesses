@@ -35,9 +35,10 @@ const said = (input, cwd = process.cwd()) => {
   return JSON.parse(text)
 }
 
-test('the relay offers plan updates and streamed command output, and no terminal of its own', () => {
+test('the relay offers streamed command output, no terminal of its own, and no plan capability', () => {
   const { offered } = said('hi')
-  assert.deepEqual(offered.plan, {})
+  // With one, codex-acp sends a markdown plan as plan_update, which via does not draw, in place of text.
+  assert.equal(offered.plan, undefined)
   assert.equal(offered._meta.terminal_output_delta, true)
   assert.equal(offered.terminal, false)
 })

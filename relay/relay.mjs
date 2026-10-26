@@ -9762,14 +9762,14 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
 }).connectWith(stream, async (ctx) => {
   const init = await ctx.request(methods.agent.initialize, {
     protocolVersion: PROTOCOL_VERSION,
-    // plan: codex-acp sends plan_update only to a client that declares one (not yet in the stable schema);
     // terminal_output_delta: command output in tool call updates, the Zed convention. No client
-    // terminal: commands stay in the agent's own sandbox.
+    // terminal: commands stay in the agent's own sandbox. No plan capability: a to-do list comes as a
+    // plan update either way, and with it codex-acp sends a markdown plan as plan_update, which this
+    // client does not draw, in place of the message text it otherwise is.
     clientCapabilities: {
       fs: { readTextFile: false, writeTextFile: false },
       terminal: false,
-      _meta: { terminal_output_delta: true },
-      ...{ plan: {} }
+      _meta: { terminal_output_delta: true }
     }
   });
   const resume = process.env.RELAY_SESSION;
