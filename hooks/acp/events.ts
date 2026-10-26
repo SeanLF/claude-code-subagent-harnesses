@@ -9,17 +9,21 @@ import type { Ask, Norm } from './norm'
 // shown relative to it: the rest of the title survives the clip, and reads as the agent's own.
 // Only where a path starts (the title's start, a quote, a space, an opening parenthesis or =), so a path that merely
 // contains the folder (/x/a/repo/y for /a/repo) stays whole.
-const relative = (title: string, cwd: string) =>
+export const relative = (title: string, cwd: string) =>
   cwd ? title.replace(new RegExp(`(^|[\\s'"(=])${cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`, 'g'), '$1') : title
 
-const clip = (text: string) => (text.length > 100 ? `${text.slice(0, 100)}…` : text)
+export const clip = (text: string) => (text.length > 100 ? `${text.slice(0, 100)}…` : text)
 
-const cap = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text)
-const tail = (text: string, max: number) => (text.length > max ? `…${text.slice(-max)}` : text)
+export const cap = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text)
+export const tail = (text: string, max: number) => (text.length > max ? `…${text.slice(-max)}` : text)
+
+// A diff as a row shows it: the path, then its changed lines, the first 40 of them.
+export const diffRows = (path: string, changed: string[]) =>
+  changed.length > 40 ? `${[path, ...changed.slice(0, 40)].join('\n')}\n…` : [path, ...changed].join('\n')
 
 // An edit as its changed lines: the path, then the lines it took out (-) and put in (+), past what both
 // versions share at the start and the end. A new file has no old text.
-function diffOf(path: string, oldText: string, newText: string): string {
+export function diffOf(path: string, oldText: string, newText: string): string {
   const before = oldText ? oldText.split('\n') : []
   const after = newText ? newText.split('\n') : []
   let start = 0
@@ -30,8 +34,7 @@ function diffOf(path: string, oldText: string, newText: string): string {
     endBefore -= 1
     endAfter -= 1
   }
-  const lines = [path, ...before.slice(start, endBefore).map((l) => `- ${l}`), ...after.slice(start, endAfter).map((l) => `+ ${l}`)]
-  return lines.length > 41 ? `${lines.slice(0, 41).join('\n')}\n…` : lines.join('\n')
+  return diffRows(path, [...before.slice(start, endBefore).map((l) => `- ${l}`), ...after.slice(start, endAfter).map((l) => `+ ${l}`)])
 }
 
 // What a finished tool call returned, as the agent reported it: its text content, a diff of each file

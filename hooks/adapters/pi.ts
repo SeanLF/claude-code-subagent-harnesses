@@ -1,4 +1,5 @@
 import type { ExtensionAPI, JsonAgentSessionEvent } from '@earendil-works/pi-coding-agent'
+import { cap, clip, diffOf, diffRows, relative, tail } from '../acp/events'
 import { isRecord } from '../acp/json'
 import type { Adapter, Norm } from '../adapter'
 
@@ -36,14 +37,72 @@ const THINKING = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as 
 const READ_TOOLS = new Set(['read', 'grep', 'find', 'ls'])
 const readsOnly = (tools: string) => tools.split(',').every((tool) => READ_TOOLS.has(tool.trim()))
 
-// The type is pi's promise about its output, not a check of it: fields stay optional-chained.
-function wire(line: string): JsonAgentSessionEvent | undefined {
+function parse(line: string): Record<string, unknown> | undefined {
   try {
     const parsed: unknown = JSON.parse(line)
-    return isRecord(parsed) && typeof parsed.type === 'string' ? (parsed as JsonAgentSessionEvent) : undefined
+    return isRecord(parsed) && typeof parsed.type === 'string' ? parsed : undefined
   } catch {
     return undefined
   }
+}
+
+const text = (value: unknown) => (typeof value === 'string' ? value : '')
+
+// pi's own tools as ACP kinds, so their rows draw and fold as Codex's do; any other tool (an extension's,
+// an MCP server's) is `other`, titled with its arguments.
+const KINDS: Record<string, string> = {
+  read: 'read',
+  edit: 'edit',
+  write: 'edit',
+  bash: 'execute',
+  grep: 'search',
+  find: 'search',
+  ls: 'search',
+}
+
+function titleOf(tool: string, args: Record<string, unknown>): string {
+  const path = text(args.path)
+  switch (tool) {
+    case 'read':
+      return `Read ${path}`
+    case 'edit':
+      return `Edit ${path}`
+    case 'write':
+      return `Write ${path}`
+    case 'bash':
+      return text(args.command)
+    case 'grep':
+    case 'find':
+      return [tool, text(args.pattern), path].filter(Boolean).join(' ')
+    case 'ls':
+      return ['ls', path].filter(Boolean).join(' ')
+    default:
+      return `${tool}: ${JSON.stringify(args)}`
+  }
+}
+
+// What a finished tool returned: an edit as its changed lines (from the unified patch pi reports), a write
+// as the lines it wrote, anything else as its text content. A command keeps the end of a long output, where
+// an error usually is and where pi names a nonzero exit code. A failed write is its error: its lines never landed.
+function outputOf(tool: string, args: Record<string, unknown>, result: unknown, failed: boolean, cwd: string): string {
+  const r = isRecord(result) ? result : {}
+  const path = relative(text(args.path), cwd)
+  const patch = isRecord(r.details) ? text(r.details.patch) : ''
+  const lines = patch.split('\n')
+  // One file's patch: its ---/+++ header ends where the first hunk starts. A patch with no hunk falls
+  // through to the text, which says what happened.
+  const first = lines.findIndex((l) => l.startsWith('@@'))
+  if (tool === 'edit' && first >= 0) {
+    const hunks = lines.slice(first)
+    return diffRows(
+      path,
+      hunks.filter((l) => l.startsWith('-') || l.startsWith('+')).map((l) => `${l[0]} ${l.slice(1)}`),
+    )
+  }
+  if (tool === 'write' && !failed && typeof args.content === 'string') return diffOf(path, '', args.content)
+  const said = (Array.isArray(r.content) ? r.content : []).flatMap((c) => (isRecord(c) && c.type === 'text' ? [text(c.text)] : []))
+  const output = said.join('\n').trim()
+  return tool === 'bash' ? tail(output, 2000) : cap(output, 2000)
 }
 
 export const pi = {
@@ -72,10 +131,16 @@ export const pi = {
     env: { PI_INBOX: inbox ?? '' },
     input: prompt,
   }),
-  events:
-    () =>
-    (line): Norm[] => {
-      const e = wire(line)
+  events: () => {
+    let cwd = ''
+    // A call's arguments, for its output when it ends: a write's content is only in them.
+    const args = new Map<string, Record<string, unknown>>()
+    return (line): Norm[] => {
+      const raw = parse(line)
+      // The session header, which is not one of pi's typed events, names the working folder.
+      if (raw?.type === 'session' && typeof raw.cwd === 'string') cwd = raw.cwd.replace(/\/+$/, '')
+      // The type is pi's promise about its output, not a check of it: fields stay optional-chained.
+      const e = raw as JsonAgentSessionEvent | undefined
       switch (e?.type) {
         case 'message_start':
           if (e.message?.role !== 'assistant') return []
@@ -99,13 +164,36 @@ export const pi = {
           return []
         }
         case 'tool_execution_start': {
-          const args = JSON.stringify(e.args ?? {}) ?? ''
-          return [{ k: 'tool', t: `\n▸ ${e.toolName}: ${args.length > 100 ? `${args.slice(0, 100)}…` : args}\n` }]
+          const given = isRecord(e.args) ? e.args : {}
+          const tool = text(e.toolName)
+          // A call with no id cannot be matched to its end: it stays a text line.
+          if (typeof e.toolCallId !== 'string') return [{ k: 'tool', t: `\n▸ ${clip(`${tool}: ${JSON.stringify(given)}`)}\n` }]
+          args.set(e.toolCallId, given)
+          const path = text(given.path)
+          // Only an absolute path links to its file.
+          const absolute = path.startsWith('/') ? path : path && cwd ? `${cwd}/${path}` : ''
+          return [
+            {
+              k: 'call',
+              id: e.toolCallId,
+              kind: KINDS[tool] ?? 'other',
+              title: clip(relative(titleOf(tool, given), cwd)),
+              ...(absolute ? { path: absolute } : {}),
+            },
+          ]
+        }
+        case 'tool_execution_end': {
+          if (typeof e.toolCallId !== 'string') return []
+          const given = args.get(e.toolCallId) ?? {}
+          args.delete(e.toolCallId)
+          const failed = e.isError === true
+          return [{ k: 'called', id: e.toolCallId, output: outputOf(text(e.toolName), given, e.result, failed, cwd), failed }]
         }
         default:
           return []
       }
-    },
+    }
+  },
   // pi names its model in the stream; a model line is a pattern, not a name to sign with.
   model: () => undefined,
   models: 'pi --list-models <search> finds patterns.',

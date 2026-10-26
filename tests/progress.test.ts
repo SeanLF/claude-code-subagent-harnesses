@@ -7,6 +7,8 @@ import type { World } from '../hooks/world'
 import { ENV, hang, hold, run, type Spawn, type Write } from './helpers'
 
 const START = { type: 'message_start', message: { role: 'assistant', provider: 'openrouter', model: 'kimi' } }
+// No call id: a text line, as agy sends, which feeds the panel row. pi's calls carry ids and become steps
+// instead (tests/adapters/pi.test.ts pins that pi emits no text line for them).
 const TOOL = { type: 'tool_execution_start', toolName: 'bash', args: { command: 'npm test' } }
 const END = { type: 'message_end', message: { role: 'assistant', usage: { input: 1, output: 1 } } }
 const TEXT = { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'done' } }
