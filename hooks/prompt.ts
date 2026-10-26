@@ -19,6 +19,9 @@ export type PromptSpec = {
 
 export const isModel = (value: string) => VALUE.model.test(value)
 
+// pi and OpenCode list hundreds: the help names the first, and the harness's own command finds the rest.
+const LISTED = 30
+
 function helpName(line: string, adapter: PromptAdapter): boolean {
   const name = HELP_LINE.exec(line)?.[1]?.toLowerCase()
   return name === 'via' || name === adapter.name.toLowerCase()
@@ -72,11 +75,15 @@ export function promptOf(text: string, adapter: PromptAdapter): PromptSpec {
   return help ? { prompt, help } : { prompt, ...asked }
 }
 
-export function helpOf(adapter: HelpAdapter): string {
+// models: the harness's own list, best or default first; empty until via has read it once.
+export function helpOf(adapter: HelpAdapter, models: readonly string[]): string {
   const name = adapter.name
+  const shown = models.slice(0, LISTED)
+  const more = models.length > shown.length ? ` and ${models.length - shown.length} more` : ''
+  const offered = shown.length > 0 ? ` ${name} offers ${shown.join(', ')}${more}.` : ''
   const lines = [
     `${name} prompt lines: put them at the top of the prompt, one per line, before the task. Each holds for this agent's later messages until a new line replaces it.`,
-    `model: <pattern>    passed to ${adapter.bin} as its model (e.g. ${adapter.modelExample}).${adapter.models ? ` ${adapter.models}` : ''}`,
+    `model: <pattern>    passed to ${adapter.bin} as its model.${offered}${adapter.models ? ` ${adapter.models}` : ''}`,
   ]
   if (adapter.readOnly === 'none') lines.push(`tools:              refused: ${name} cannot enforce read-only tools.`)
   else if (adapter.tools) lines.push(`tools: read         ${name} runs read-only and cannot edit files; without a tools line it can.`)
@@ -99,14 +106,14 @@ export function helpOf(adapter: HelpAdapter): string {
   )
   if (adapter.steer) lines.push('A message starting interrupt: stops the current step and runs at once.')
   lines.push(`A genuine answer ends with — answered by ${name}, <model>. Example:`)
-  lines.push(`model: ${adapter.modelExample}`)
+  if (models[0]) lines.push(`model: ${models[0]}`)
   if (adapter.thinking.includes('high')) lines.push('thinking: high')
   lines.push('Review the error handling in src/api.')
   return lines.join('\n')
 }
 
-export function descriptionOf(adapter: HelpAdapter): string {
-  const top = [`\`model: ${adapter.modelExample}\``]
+export function descriptionOf(adapter: HelpAdapter, models: readonly string[]): string {
+  const top = models[0] ? [`\`model: ${models[0]}\``] : []
   if (adapter.readOnly !== 'none') top.push('`tools: read`')
   if (adapter.thinking.length > 0) top.push('`thinking: high`')
   const steer = adapter.steer ? ' SendMessage steers it mid-run; one starting `interrupt:` stops its current step first.' : ''

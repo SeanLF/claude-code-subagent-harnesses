@@ -3,6 +3,7 @@ import type { Choice } from '../types'
 import { endJob, type Job, type Mark, pump } from './acp/steps'
 import type { Adapter, Mode } from './adapter'
 import { deliver, handbackAsked, respond, textChunks } from './handback'
+import { cachedModels } from './models'
 import { helpOf, isModel, promptOf } from './prompt'
 import { notActive, type RunResult, run } from './run'
 import { openInbox } from './steer'
@@ -10,7 +11,7 @@ import type { World } from './world'
 
 type StepHook = StreamHook<'turn.step'>
 
-async function adapterOf(w: World, $: Parameters<StepHook>[0], agentId: string): Promise<Adapter | undefined> {
+export async function adapterOf(w: World, $: Parameters<StepHook>[0], agentId: string): Promise<Adapter | undefined> {
   if (w.others.has(agentId)) return undefined
   const known = w.agents.get(agentId)
   if (known) return known
@@ -204,9 +205,12 @@ async function* begin(
     return yield* respond(e, textChunks(bad), bad)
   }
   const asked = promptOf(turn.prompt, adapter)
-  if (asked.help) return yield* respond(e, textChunks(helpOf(adapter)), helpOf(adapter))
+  if (asked.help) {
+    const help = helpOf(adapter, await cachedModels($, adapter, w.defaultModel))
+    return yield* respond(e, textChunks(help), help)
+  }
   if (asked.error !== undefined) {
-    const bad = `${asked.error}\n\n${helpOf(adapter)}`
+    const bad = `${asked.error}\n\n${helpOf(adapter, await cachedModels($, adapter, w.defaultModel))}`
     return yield* respond(e, textChunks(bad), bad)
   }
 

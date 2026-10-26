@@ -61,6 +61,9 @@ export async function* run(
   let error = ''
   let steered = 0
   let touched = false
+  // A /compact prompt that compacted and said nothing has the compaction as its answer.
+  const compacting = new Set<string>()
+  let compacted = false
   const asks: Ask[] = []
   // Calls announced and not yet reported done: an interrupt or the run's end closes them as failed,
   // or their rows would stay running and via's tool.call hook would wait on them.
@@ -103,8 +106,7 @@ export async function* run(
           break
         case 'usage':
           // Claude Code reads input + cache as the agent's context: report the last model call, never
-          // the run's sum, which reads as a context past the window and gets compacted. Cost accuracy
-          // is traded away for that.
+          // the run's sum. Cost accuracy is traded away for that; the harness's own logs keep it.
           last.input = event.usage.input
           last.cacheRead = event.usage.cacheRead
           last.cacheWrite = event.usage.cacheWrite
@@ -138,6 +140,7 @@ export async function* run(
         case 'call': {
           kind = undefined
           open.add(event.id)
+          if (event.kind === 'compact') compacting.add(event.id)
           const input = { kind: event.kind, title: event.title, ...(event.path ? { path: event.path } : {}) }
           chunks.push({ kind: 'call-start', id: event.id, input, usage: usageNow() })
           break
@@ -156,6 +159,7 @@ export async function* run(
         }
         case 'called':
           if (!open.delete(event.id)) break
+          if (compacting.has(event.id) && !event.failed) compacted = true
           chunks.push({ kind: 'call-end', id: event.id, output: event.output, failed: event.failed })
           break
         case 'tool': {
@@ -228,6 +232,8 @@ export async function* run(
       const exit = await child.result
       const known = adapter.failure?.(exit, stderr)
       if (known?.sessionLost) await save('')
+      if (exit.code === 0 && !report.trim() && compacted && /^\/compact\b/.test(prompt.trim()) && known === undefined && !error)
+        report = 'Compacted the conversation.'
       if (known !== undefined) failure = known.message
       else if (error) failure = `${adapter.name}'s model call failed: ${error}`
       else if (exit.code !== 0 || !report.trim()) {

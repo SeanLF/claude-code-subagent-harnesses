@@ -192,10 +192,12 @@ const result = await acp
       // terminal_output_delta: command output in tool call updates, the Zed convention. No client
       // terminal: commands stay in the agent's own sandbox. No plan capability: a to-do list comes as a
       // plan update either way, and with it codex-acp sends a markdown plan as plan_update, which this
-      // client does not draw, in place of the message text it otherwise is.
+      // client does not draw, in place of the message text it otherwise is. Compaction: codex-acp then
+      // reports the agent's compaction as compaction updates, not a tool call or a line in the answer.
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
+        session: { compaction: {} },
         _meta: { terminal_output_delta: true },
       },
     })

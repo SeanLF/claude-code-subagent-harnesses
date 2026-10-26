@@ -7,7 +7,7 @@ import { pi } from '../hooks/adapters/pi'
 import { descriptionOf, helpOf, promptOf } from '../hooks/prompt'
 import { unwrapped } from '../hooks/register'
 
-const HELP = helpOf(pi)
+const HELP = helpOf(pi, [])
 
 import { arrange, expectPiSpawn, lines, ROOT, run, type Spawn, STEP, STUB, split } from './helpers'
 
@@ -219,7 +219,7 @@ test('a tools line is refused on an adapter that cannot enforce read-only', () =
 })
 
 test('help is generated from the adapter fields', () => {
-  const stubHelp = helpOf(STUB)
+  const stubHelp = helpOf(STUB, [])
   expect(stubHelp).toContain('refused: stub cannot enforce read-only tools')
   expect(stubHelp).toContain('low, high')
   expect(stubHelp).toContain('no mid-run steering')
@@ -233,19 +233,19 @@ test('help is generated from the adapter fields', () => {
 
 test('help and description say every ACP harness steers mid-run and takes interrupt:', () => {
   for (const adapter of [codex, opencode]) {
-    const help = helpOf(adapter)
+    const help = helpOf(adapter, [])
     expect(help).toContain('at its next step')
     expect(help).toContain('interrupt:')
     expect(help).toContain('runs read-only and cannot edit files')
     expect(help).not.toContain('sandbox')
-    expect(descriptionOf(adapter)).toContain('steers it mid-run')
+    expect(descriptionOf(adapter, [])).toContain('steers it mid-run')
   }
 })
 
 test('only a harness that steers tells Claude about interrupt:', () => {
-  expect(descriptionOf(pi)).toContain('`interrupt:`')
-  expect(descriptionOf(codex)).toContain('`interrupt:`')
-  expect(descriptionOf(agy)).not.toContain('interrupt')
+  expect(descriptionOf(pi, [])).toContain('`interrupt:`')
+  expect(descriptionOf(codex, [])).toContain('`interrupt:`')
+  expect(descriptionOf(agy, [])).not.toContain('interrupt')
 })
 
 test('a model line starting with - is refused, so it can never be read as a flag', () => {
@@ -282,4 +282,25 @@ test("an envelope's quoted > and CRLF lines stay out of the task, and unclosed o
   // Nested or stray envelopes are not unwrapped at all.
   const nested = '<teammate-message a="1"><teammate-message b="2">x</teammate-message></teammate-message>'
   expect(unwrapped(nested)).toBe(nested)
+})
+
+// As Claude Code 2.1.310 resumes an agent that answered, captured from a live SendMessage.
+const resumed = (message: string) =>
+  `The coordinator sent a message while you were working:\n${message}\n\nAddress this before completing your current task.`
+
+test('a follow-up SendMessage reaches the harness unwrapped, so its prompt lines and slash commands lead', async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns, split(lines))
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: resumed('model: openrouter/kimi\n/compact') })
+  await run($)
+  expectPiSpawn(spawns[0], ROOT, ['--model', 'openrouter/kimi'])
+  expect(spawns[0]?.input).toBe('/compact')
+})
+
+test('only the whole coordinator wrapper is taken off; a message quoting it is left as written', () => {
+  expect(unwrapped(resumed('Reply with TWO.'))).toBe('Reply with TWO.')
+  const quoted = `Look: ${resumed('x')}`
+  expect(unwrapped(quoted)).toBe(quoted)
+  const unended = 'The coordinator sent a message while you were working:\nx'
+  expect(unwrapped(unended)).toBe(unended)
 })

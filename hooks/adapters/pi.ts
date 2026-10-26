@@ -1,5 +1,5 @@
 import type { ExtensionAPI, JsonAgentSessionEvent } from '@earendil-works/pi-coding-agent'
-import { cap, clip, diffOf, diffRows, relative, tail } from '../acp/events'
+import { cap, clip, compactionOutput, diffOf, diffRows, relative, tail } from '../acp/events'
 import { isRecord } from '../acp/json'
 import type { Adapter, Norm } from '../adapter'
 
@@ -109,7 +109,31 @@ export const pi = {
   name: 'pi',
   bin: 'pi',
   about: "pi CLI agent: any provider's model, own tools (edits files).",
-  modelExample: 'openrouter/moonshotai/kimi-k2',
+  // A table under a header row: provider, model, then its limits, sorted by name; pi's default is in
+  // its settings.
+  catalogue: {
+    argv: ['pi', '--list-models'],
+    preferred: {
+      file: '.pi/agent/settings.json',
+      pick: (text: string) => {
+        try {
+          const s = JSON.parse(text) as { defaultProvider?: unknown; defaultModel?: unknown }
+          return typeof s.defaultProvider === 'string' && typeof s.defaultModel === 'string'
+            ? `${s.defaultProvider}/${s.defaultModel}`
+            : undefined
+        } catch {
+          return undefined
+        }
+      },
+    },
+    ids: (stdout: string) =>
+      stdout
+        .split('\n')
+        .slice(1)
+        .map((line) => line.trim().split(/\s+/))
+        .filter((cells) => cells.length >= 2)
+        .map(([provider, model]) => `${provider}/${model}`),
+  },
   readOnly: 'enforced',
   thinking: THINKING,
   steer: true,
@@ -135,6 +159,7 @@ export const pi = {
     let cwd = ''
     // A call's arguments, for its output when it ends: a write's content is only in them.
     const args = new Map<string, Record<string, unknown>>()
+    let compactions = 0
     return (line): Norm[] => {
       const raw = parse(line)
       // The session header, which is not one of pi's typed events, names the working folder.
@@ -181,6 +206,18 @@ export const pi = {
               ...(absolute ? { path: absolute } : {}),
             },
           ]
+        }
+        // pi compacts its own context: a row, as Claude Code shows its own compaction.
+        case 'compaction_start':
+          compactions += 1
+          return [{ k: 'call', id: `pi-compaction-${compactions}`, kind: 'compact', title: 'conversation' }]
+        case 'compaction_end': {
+          const r = e.result
+          const why = e.reason === 'threshold' ? undefined : e.reason
+          const output = r
+            ? compactionOutput({ before: r.tokensBefore, after: r.estimatedTokensAfter, why, summary: r.summary })
+            : e.errorMessage || (e.aborted ? 'Stopped.' : 'pi could not compact.')
+          return [{ k: 'called', id: `pi-compaction-${compactions}`, output, failed: r === undefined }]
         }
         case 'tool_execution_end': {
           if (typeof e.toolCallId !== 'string') return []

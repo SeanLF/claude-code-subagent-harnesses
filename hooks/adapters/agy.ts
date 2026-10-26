@@ -41,7 +41,8 @@ export const agy = {
   bin: 'agy',
   about:
     'Antigravity CLI agent: Gemini, Claude and GPT-OSS models through a Google account, own tools (edits files, runs sandboxed commands; no read-only mode).',
-  modelExample: 'gemini-3.8-flash',
+  // One `id<TAB>name` per line; agy says it is fetching on stderr.
+  catalogue: { argv: ['agy', 'models'], ids: (stdout: string) => stdout.split('\n').map((line) => line.split('\t')[0]?.trim() ?? '') },
   // Neither --mode plan nor --sandbox is read-only: plan mode ran a command that wrote a file
   // (tested live on 1.4.7), and --sandbox restricts only terminal commands.
   readOnly: 'none',

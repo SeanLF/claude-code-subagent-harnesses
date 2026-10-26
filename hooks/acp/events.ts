@@ -17,6 +17,16 @@ export const clip = (text: string) => (text.length > 100 ? `${text.slice(0, 100)
 export const cap = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text)
 export const tail = (text: string, max: number) => (text.length > max ? `…${text.slice(-max)}` : text)
 
+const tokens = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+
+// A harness's compaction as a row's output: its sizes on the line that stays when the row folds, as
+// Claude Code shows its own in one line, and the summary below it, for ctrl+o.
+export function compactionOutput(c: { before?: number; after?: number; why?: string; summary?: string }): string {
+  const sizes = c.before !== undefined ? `${tokens(c.before)}${c.after !== undefined ? ` → ${tokens(c.after)}` : ''} tokens` : ''
+  const head = [sizes, c.why].filter(Boolean).join(' · ')
+  return [head, c.summary?.trim()].filter(Boolean).join('\n\n')
+}
+
 // A diff as a row shows it: the path, then its changed lines, the first 40 of them.
 export const diffRows = (path: string, changed: string[]) =>
   changed.length > 40 ? `${[path, ...changed.slice(0, 40)].join('\n')}\n…` : [path, ...changed].join('\n')
@@ -86,6 +96,7 @@ export function relayEvents(): (line: string) => Norm[] {
   const shown = new Set<string>()
   const ended = new Set<string>()
   const titles = new Map<string, string>()
+  const compactions = new Map<string, { before: number; summary: string }>()
   const kinds = new Map<string, string>()
   // A command's output, as codex-acp streams it (_meta.terminal_output_delta), and its exit code.
   const printed = new Map<string, string>()
@@ -210,6 +221,31 @@ export function relayEvents(): (line: string) => Norm[] {
             : [],
         )
         return entries.length > 0 ? [{ k: 'plan', entries }] : []
+      }
+      // The agent compacts its own context: a row, as Claude Code shows its own compaction. The relay
+      // asks for these, so codex-acp sends them in place of a tool call or a line in the answer.
+      case 'compaction_summary_chunk':
+      case 'compaction_update': {
+        if (typeof u.compactionId !== 'string') return []
+        const id = `compaction:${u.compactionId}`
+        const out: Norm[] = []
+        if (!compactions.has(id)) {
+          compactions.set(id, { before: context, summary: '' })
+          out.push({ k: 'call', id, kind: 'compact', title: 'conversation' })
+        }
+        const c = compactions.get(id) ?? { before: context, summary: '' }
+        const blocks = u.sessionUpdate === 'compaction_summary_chunk' ? [u.content] : (u.summary ?? [])
+        const said = blocks.map((b) => (isRecord(b) && b.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('')
+        c.summary = u.sessionUpdate === 'compaction_summary_chunk' ? c.summary + said : u.summary === undefined ? c.summary : said
+        if (u.sessionUpdate === 'compaction_update' && u.status !== 'in_progress' && !ended.has(id)) {
+          ended.add(id)
+          const failed = u.status !== 'completed'
+          const output = failed
+            ? u.error || `Compaction ${u.status}.`
+            : compactionOutput({ before: c.before || undefined, summary: c.summary })
+          out.push({ k: 'called', id, output, failed })
+        }
+        return out
       }
       case 'usage_update':
         // The agent's own count of its context, which is what Claude Code reads usage as.

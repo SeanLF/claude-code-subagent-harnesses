@@ -465,3 +465,22 @@ test('the dialog drops bidirectional and zero-width characters that could disgui
   await runTurn($)
   expect(asked[0]).toBe('codex wants to run `echo safe; rm -rf ~`. Allow it?')
 })
+
+test('a /compact turn shows the compaction as a row and answers that it compacted, not that codex said nothing', async ($, on) => {
+  const spawns: Spawn[] = []
+  const compaction = (status: string) => ({ sessionId: SID, update: { sessionUpdate: 'compaction_update', compactionId: 'c1', status } })
+  const stdout = lines([
+    { relay: 'session', sessionId: SID },
+    { relay: 'model', name: 'gpt-6-luna' },
+    { relay: 'steered' },
+    compaction('in_progress'),
+    compaction('completed'),
+    { relay: 'prompt_done', stopReason: 'end_turn' },
+    { relay: 'done', stopReason: 'end_turn' },
+  ])
+  arrange(on, spawns, { stdout })
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: '/compact' })
+  const { chunks, result } = await runTurn($)
+  expect(chunks.some((c) => c.kind === 'input' && JSON.parse(c.json).kind === 'compact')).toBe(true)
+  expect(result.answer).toBe('Compacted the conversation.\n\n— answered by codex, gpt-6-luna')
+})

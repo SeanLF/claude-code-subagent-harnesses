@@ -9,7 +9,13 @@ export type Adapter = {
   readonly name: string
   readonly bin: string
   readonly about: string // the agent type's one-line description starts with it
-  readonly modelExample: string
+  // How the harness lists the models this person can use, in its own order. preferred: the harness's
+  // configured default, from a file under home, put first when its list does not lead with it.
+  readonly catalogue: {
+    readonly argv: readonly string[]
+    ids(stdout: string): string[]
+    readonly preferred?: { readonly file: string; pick(text: string): string | undefined }
+  }
   readonly readOnly: 'enforced' | 'none'
   readonly tools?: readonly string[] // the only values a tools line may take; absent: a free tool list
   readonly thinking: readonly string[]
@@ -60,4 +66,4 @@ export type Adapter = {
 }
 
 export type PromptAdapter = Pick<Adapter, 'name' | 'readOnly' | 'thinking' | 'tools'>
-export type HelpAdapter = PromptAdapter & Pick<Adapter, 'bin' | 'about' | 'modelExample' | 'steer' | 'defaultModel' | 'models'>
+export type HelpAdapter = PromptAdapter & Pick<Adapter, 'bin' | 'about' | 'steer' | 'defaultModel' | 'models'>

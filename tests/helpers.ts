@@ -10,7 +10,6 @@ export const STUB = {
   name: 'stub',
   bin: 'stub',
   about: 'stub CLI agent.',
-  modelExample: 'm',
   readOnly: 'none',
   thinking: ['low', 'high'],
   steer: false,

@@ -47,7 +47,7 @@ export const opencode = {
   name: 'opencode',
   bin: 'opencode',
   about: "OpenCode CLI agent: any provider's model, including OpenCode's free ones, own tools (edits files).",
-  modelExample: 'opencode/deepseek-v4.1-flash-free',
+  catalogue: { argv: ['opencode', 'models'], ids: (stdout: string) => stdout.split('\n').map((line) => line.trim()) },
   readOnly: 'enforced',
   tools: ['read'],
   thinking: THINKING,

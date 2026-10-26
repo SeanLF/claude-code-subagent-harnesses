@@ -3,10 +3,11 @@ import { drawCall, drawGroup } from './acp/render'
 import { answerCall, endJob } from './acp/steps'
 import type { Adapter } from './adapter'
 import { HARNESSES } from './harnesses'
-import { descriptionOf } from './prompt'
+import { cachedModels, refreshModels } from './models'
+import { descriptionOf, isModel, promptOf } from './prompt'
 import { notActivePrompt } from './run'
 import { sendMessage } from './steer'
-import { turnStep } from './turn'
+import { adapterOf, turnStep } from './turn'
 import type { World } from './world'
 
 // Only harnesses installed at session start get an agent type: each description rides on every request.
@@ -30,9 +31,19 @@ async function onPath($: Pick<EngineInterface, 'env' | 'fs'>, bin: string): Prom
 // the harness gets the task alone, so its prompt lines (model:, tools:) are read from its top.
 // Only a message that is nothing but envelopes is unwrapped. One linear pass: an attribute may hold a
 // quoted >, and a message full of unclosed openers must not cost quadratic time.
+// A SendMessage to a via agent that has answered resumes it with the message wrapped, so a slash
+// command or a prompt line in it would not be at the top: codex-acp runs /compact only there.
+const SENT = 'The coordinator sent a message while you were working:\n'
+const ADDRESS = '\n\nAddress this before completing your current task.'
+function fromCoordinator(text: string): string | undefined {
+  if (!text.startsWith(SENT) || !text.endsWith(ADDRESS)) return undefined
+  return text.slice(SENT.length, -ADDRESS.length).trim()
+}
 const OPEN = '<teammate-message'
 const CLOSE = '</teammate-message>'
 export function unwrapped(text: string): string {
+  const sent = fromCoordinator(text)
+  if (sent !== undefined) return sent
   const inner: string[] = []
   let at = 0
   for (;;) {
@@ -64,6 +75,31 @@ export function unwrapped(text: string): string {
 // The tool of the server plugin.json declares as `step`, named as Claude Code names a plugin's server.
 const STEP = 'mcp__plugin_via_step__step'
 
+const CLAUDE = /claude|opus|sonnet|haiku|fable/i
+const KEPT = 4
+const DROPPED = "Earlier steps of this run were dropped from Claude Code's copy; the harness still has them."
+
+// Claude Code reads a via agent's usage as its own context and refuses a step past the window, 200k for
+// a model it does not know. This variable sizes only such models; with a gateway model on the main loop
+// it would size that too, so via sets it only while Claude is the main model, and never over the
+// person's own value. via's value is told apart by being exactly RAISED, so a reload or a /model
+// switch undoes only via's. The process's children inherit it, as any variable.
+const RAISED = String(1e9)
+async function sizeWindow($: Pick<EngineInterface, 'env'>, main: string): Promise<void> {
+  const now = await $.env.get('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
+  if (now !== undefined && now !== RAISED) return
+  if (CLAUDE.test(main)) {
+    if (now === undefined) await $.env.set('CLAUDE_CODE_MAX_CONTEXT_TOKENS', RAISED)
+  } else if (now === RAISED) await $.env.set('CLAUDE_CODE_MAX_CONTEXT_TOKENS', undefined)
+}
+
+// What the run will ask for, as turn.ts chooses it; the harness's own default is unknown until it answers.
+function choiceOf(world: World, adapter: Adapter, prompt: string): { model?: string; thinking?: string } {
+  const asked = promptOf(unwrapped(prompt), adapter)
+  const fallback = adapter.defaultModel && isModel(world.defaultModel) ? world.defaultModel : undefined
+  return { model: asked.model ?? fallback, thinking: asked.thinking }
+}
+
 export const register: Register = (on, options) => {
   const asked = options.timeoutMinutes
   const world: World = {
@@ -87,27 +123,43 @@ export const register: Register = (on, options) => {
   }
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    // Best effort: a hook that throws is skipped whole, and the agents below must still register.
+    await $.session
+      .model()
+      .then((main) => sizeWindow($, main))
+      .catch(() => undefined)
     // Each harness tool call reaches Claude Code as a call to this tool, served by mcp/step.mts, which
     // runs nothing: its tool.call hook answers with what the harness reported. Bash would look the same,
     // but a hook that fails is skipped and the real command would run; a call nobody answers fails.
     for (const adapter of world.adapters.values()) {
       if (!(await onPath($, adapter.bin))) continue
+      const models = await cachedModels($, adapter, world.defaultModel)
+      void refreshModels($, adapter).catch(() => undefined)
       await $.agent.register({
         name: adapter.name,
-        description: descriptionOf(adapter),
+        description: descriptionOf(adapter, models),
         prompt: notActivePrompt(adapter.name),
         tools: [world.tool],
-        model: 'haiku',
+        model: adapter.name,
       })
     }
     return started
   })
 
   on('agent.spawn', async ($, e, next) => {
-    const started = await next(e)
     const [plugin, name = ''] = (e.subagentType ?? '').split(':')
-    const adapter = world.adapters.get(name)
-    if (started.agentId && plugin === $.plugin.name && adapter) {
+    const adapter = plugin === $.plugin.name ? world.adapters.get(name) : undefined
+    // No request reaches Claude: the agent's model is the harness's, which Claude Code stamps on every
+    // response via makes up. Claude Code takes gateway model ids. The task shows what was asked for.
+    // A resume keeps what its agent started with; a workflow agent's description is the script's.
+    const choice = adapter && !e.resume ? choiceOf(world, adapter, e.prompt) : undefined
+    const shown = choice && !e.workflow ? [choice.model, choice.thinking].filter(Boolean).join(' · ') : ''
+    const started = await next(
+      adapter && choice
+        ? { ...e, model: choice.model ?? adapter.name, ...(shown ? { description: `${e.description} · ${shown}` } : {}) }
+        : e,
+    )
+    if (started.agentId && adapter) {
       // agent.list may lag the first step, so learn the harness at the spawn.
       world.agents.set(started.agentId, adapter)
       world.seeds.set(started.agentId, e.prompt)
@@ -135,6 +187,25 @@ export const register: Register = (on, options) => {
       if (prompt) world.turns.set(e.turnId, { prompt, delivered: false })
     }
     return next(e)
+  })
+
+  // No model reads a via agent's conversation, only the screen, and the harness keeps its own context.
+  // Claude Code still refuses a step once the conversation passes its window, and its summarizer cannot
+  // run on the harness's model: so via drops the old rows itself. Skipping would leave the step refused.
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId === undefined || !(await adapterOf(world, $, e.agentId))) return next(e)
+    if (e.trigger === 'precompute') return { skip: 'via compacts without a summary.' }
+    // From an assistant message, so no tool result is kept without its call.
+    const from = e.messages.findIndex((m, i) => i >= e.messages.length - KEPT && m.role === 'assistant')
+    const note = { role: 'user' as const, text: DROPPED, toolUses: [] }
+    return { messages: from === -1 ? [note] : [note, ...e.messages.slice(from)] }
+  })
+
+  // A /model switch to a gateway model must not keep a window sized for via's agents.
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    const done = await next(e)
+    await sizeWindow($, e.to_model).catch(() => undefined)
+    return done
   })
 
   on('turn.complete', async (_, e, next) => {

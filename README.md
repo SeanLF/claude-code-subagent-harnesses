@@ -22,6 +22,8 @@ Codex's tool calls fold into one line, as Claude Code folds its own (`Ran 4 comm
 - Codex's and OpenCode's tool calls reach Claude Code as calls to `via`'s own tool, `step`, which runs nothing: `via` answers each with what the harness reported, and draws it as a row (`Ran npm test`, `Read file 'src/a.ts'`). `step` is an MCP server's tool, so Claude Code folds a run of them into one counted line, and the agent's line in the panel gets Claude Code's own summary. A call to `step` that `via` did not make is refused. pi's and agy's tool calls show as text lines (`▸ bash: npm test`), and their latest one in the agent panel; your own `subagentStatusLine` setting, if you have one, takes precedence there.
 - The harness's session id is kept, so a follow-up continues the same conversation, even after a reload. A plain `SendMessage` to a running Codex, OpenCode or pi agent reaches it at its next step, as a message typed while Claude works does; one starting `interrupt:` stops the current step and runs the message at once. agy takes messages only as follow-ups.
 - A completed answer ends with the model that wrote it, as the harness reports it; one taken from your `model:` line because the harness didn't confirm it is marked `(requested)`, and a harness that won't say gets `model not reported`, never a guess. Stopped or failed runs say so, unsigned, and no Claude model stands in.
+- In Claude Code the agent runs as the harness's model: its transcript and its task name it (`Fix the parser · gpt-6-luna · high`), not a Claude model. The agent types' descriptions name a model each harness lists for you, refreshed at each session start.
+- A harness that compacts its own context shows it as a row, `Compacted conversation`, with pi's summary behind ctrl+o. So that Claude Code never compacts a `via` agent's copy of the conversation, which no model reads, `via` sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for the session, which sizes only non-Claude models, while a Claude model is the main one. It never touches a value you set, and undoes its own when `/model` switches to a non-Claude one. Another agent in the session on a non-Claude model gets the same window.
 - `via` uses each CLI's own login and stores no credentials.
 
 ## Permissions
@@ -52,7 +54,7 @@ Optional lines at the top of the prompt configure the harness, one per line, and
 
 | Line | Effect |
 | --- | --- |
-| `model: <model>` | The harness's model, such as `gpt-5.5`, `gemini-3.8-flash`, `opencode/deepseek-v4.1-flash-free` or `openrouter/moonshotai/kimi-k2` |
+| `model: <model>` | The harness's model; `via-help` lists the ones the harness offers you, read from the harness itself |
 | `tools: read` | Read-only, whatever the permission mode; see [Permissions](#permissions). pi also takes a tool list: `read` is read-only; any other list, such as `-bash,read`, can still edit and loads the project's .pi extensions |
 | `thinking: <level>` | Reasoning effort; a level the harness or model lacks is refused |
 | `via-help` | Replies with that harness's lines and levels instead of running it |

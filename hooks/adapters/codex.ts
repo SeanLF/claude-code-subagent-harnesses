@@ -46,7 +46,21 @@ export const codex = {
   name: 'codex',
   bin: 'codex',
   about: "Codex CLI agent: OpenAI's models, own tools in Codex's sandbox; asks you before going past it.",
-  modelExample: 'gpt-5.5',
+  // The models Codex's own picker lists, best first; hidden ones are internal.
+  catalogue: {
+    argv: ['codex', 'debug', 'models'],
+    ids: (stdout: string) => {
+      try {
+        const { models } = JSON.parse(stdout) as { models?: { slug?: unknown; visibility?: unknown; priority?: unknown }[] }
+        return (models ?? [])
+          .filter((m) => m.visibility === 'list' && typeof m.slug === 'string')
+          .sort((a, b) => Number(a.priority ?? 0) - Number(b.priority ?? 0))
+          .map((m) => m.slug as string)
+      } catch {
+        return []
+      }
+    },
+  },
   readOnly: 'enforced',
   tools: ['read'],
   thinking: THINKING,

@@ -4,8 +4,11 @@ import { unhidden } from './text'
 // What a call that reported no output answers; its row shows none.
 export const NO_OUTPUT = 'Done; no output reported.'
 
-// A diff's lines and a plan's entries are what the row is for, so more of them show before it folds.
-const FOLDED: Record<string, number> = { edit: 12, plan: 12 }
+// A diff's lines and a plan's entries are what the row is for, so more of them show before it folds;
+// a compaction's summary is not, as Claude Code keeps its own behind ctrl+o.
+const FOLDED: Record<string, number> = { edit: 12, plan: 12, compact: 1 }
+// The calls whose row reads as a verb on its title.
+const VERBS: Record<string, [string, string]> = { execute: ['Running', 'Ran'], compact: ['Compacting', 'Compacted'] }
 
 // A changed line of a diff in its theme colour; the rest dim, as a call's output is.
 function outputLine(line: string, first: boolean, diff: boolean): RenderElement {
@@ -72,7 +75,7 @@ export function drawCall(props: RenderPropsOf['ToolUse']): RenderElement {
   const kind = typeof input.kind === 'string' ? input.kind : 'other'
   const title = typeof input.title === 'string' ? unhidden(input.title).replace(/\s+/g, ' ') : ''
   const path = typeof input.path === 'string' ? unhidden(input.path) : ''
-  const [running, done] = kind === 'execute' ? ['Running', 'Ran'] : ['', '']
+  const [running, done] = VERBS[kind] ?? ['', '']
   const verb = props.isInterrupted ? 'Interrupted' : props.isErrored ? 'Failed' : props.isRunning ? running : done
   const said = typeof props.output === 'string' ? unhidden(props.output).trim() : ''
   const output = said === NO_OUTPUT ? '' : said
