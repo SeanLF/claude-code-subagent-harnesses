@@ -1,37 +1,48 @@
 # via
 
-Run Codex, Antigravity, OpenCode or pi as Claude Code subagents.
+Hand Claude Code's work to your ChatGPT or Google plan, without leaving Claude Code.
 
-Called through Bash, another agent CLI blocks until it finishes, then dumps its output: no progress, no follow-ups, no interrupt, no proof of which model answered. `via` makes each one a native subagent instead. It shows in the agent list with its current step, streams as it works, keeps its session across follow-ups, takes an interrupt, passes you any question the harness asks, and names the model behind each answer.
-
-Spend the quotas you already pay for, while Claude stays in charge: hand subtasks to Codex on your ChatGPT plan, Antigravity on your Google account, pi on a ChatGPT, Copilot or OpenRouter login, or OpenCode's free models. Each runs on its own official login, several at once if you like, and `via` stores no credentials. It's also a quick way to get a second model's read on Claude's work.
-
-A `via:codex` agent's view in Claude Code:
+`via` runs Codex, Antigravity, OpenCode and pi as native Claude Code subagents, each through its own CLI and login. Claude plans, they work, you watch and steer.
 
 ![A via:codex agent view in Claude Code: its steps folded into lines such as "Ran 4 commands", and the agent panel row "via:codex Checking budget counts in home.ts"](https://github.com/user-attachments/assets/e36113c3-b375-4f0d-99ae-5851e73105e9)
 
-Codex's tool calls fold into one line, as Claude Code folds its own (`Ran 4 commands`, `Running 3 commands…` while they run); a click or ctrl+o shows each call with its output. The agent's line in the panel carries Claude Code's own summary of what it is doing.
+Codex's tool calls fold into one line, as Claude Code's own do; ctrl+o shows each with its output.
+
+## Is this for you?
+
+Yes, if all three hold:
+
+- You work in Claude Code.
+- You also pay for ChatGPT or Google AI, or want OpenCode's free models.
+- You want to hand off tasks, or get another model's review, without switching windows.
+
+Otherwise:
+
+| If | Use |
+| --- | --- |
+| Claude Code isn't your main window | A harness that switches models itself: OpenCode, pi, Cursor |
+| You want Codex's reviews, a review gate before Claude stops, or to move the session into Codex | OpenAI's [codex-plugin-cc](https://github.com/openai/codex-plugin-cc), alongside `via` |
+| You're on API keys | [claude-code-router](https://github.com/musistudio/claude-code-router): any model, under Claude Code's permissions |
+
+## What I've used it for
+
+- **Codex, to spend my ChatGPT plan too.** A TypeScript migration one slice per agent, refactors, mutation testing, and fixing what a review found.
+- **Free models for small tasks.** DeepSeek V4.1 Flash on OpenCode's free tier, or OpenRouter's free models through pi.
+- **A review by a model that didn't write it**, before a release or going public.
+- **The same fix on two models**, to see which one's good enough.
+
+## Why via
+
+- **No translated tool calls.** Each model drives the harness it was built for, not Claude Code's tools through a proxy. The same model scores 13 to 21 points apart across harnesses on Terminal-Bench ([survey](https://arxiv.org/pdf/2606.20683)).
+- **No borrowed logins for Codex and agy.** They are OpenAI's and Google's own CLIs. Google has [suspended accounts](https://discuss.ai.google.dev/t/paid-pro-subscriber-banned-instantly-for-testing-opencode-oauth/124403) for logging in to Antigravity from other tools. `via` holds no tokens.
+- **No Claude tokens on the hand-off.** No Claude model sits between Claude and the harness; OpenAI's plugin puts a Sonnet subagent there.
+- **A subagent, not a Bash call.** Each streams, takes follow-ups and interrupts, runs beside the others, and signs its answer with the model that wrote it.
+- **Pinned by default.** Codex's adapter installs on first use from a lockfile `via` ships: every package hash-checked, no install scripts. CI runs against the latest Claude Code weekly.
 
 > [!IMPORTANT]
-> Each harness runs its own tools as you, with its own permission settings, outside Claude Code's. The one thing `via` enforces is read-only: plan mode, or `tools: read` at the top of the prompt. Codex, OpenCode and pi then can't write; agy refuses, because it can't.
-
-## How it works
-
-- At session start, `via` adds an agent type for each harness on your PATH: `via:codex`, `via:agy`, `via:opencode`, `via:pi`.
-- When Claude hands one a task, `via` runs that CLI headless with the prompt on stdin and streams its text, its tool calls and, where the harness reports it, its thinking. Codex and OpenCode run over the [Agent Client Protocol](https://agentclientprotocol.com) through a relay that ships with `via`, the ACP SDK bundled in. Codex's adapter, [`codex-acp`](https://github.com/agentclientprotocol/codex-acp), drives your own `codex`; on first use `via` installs it from the lockfile it ships (every package pinned and hash-checked, no install scripts, no Codex binary) into `~/.claude/via/acp/`.
-- Codex's and OpenCode's tool calls reach Claude Code as calls to `via`'s own tool, `step`, which runs nothing: `via` answers each with what the harness reported, and draws it as a row (`Ran npm test`, `Read file 'src/a.ts'`). `step` is an MCP server's tool, so Claude Code folds a run of them into one counted line, and the agent's line in the panel gets Claude Code's own summary. A call to `step` that `via` did not make is refused. pi's and agy's tool calls show as text lines (`▸ bash: npm test`), and their latest one in the agent panel; your own `subagentStatusLine` setting, if you have one, takes precedence there.
-- The harness's session id is kept, so a follow-up continues the same conversation, even after a reload. A plain `SendMessage` to a running Codex, OpenCode or pi agent reaches it at its next step, as a message typed while Claude works does; one starting `interrupt:` stops the current step and runs the message at once. agy takes messages only as follow-ups.
-- A completed answer ends with the model that wrote it, as the harness reports it; one taken from your `model:` line because the harness didn't confirm it is marked `(requested)`, and a harness that won't say gets `model not reported`, never a guess. Stopped or failed runs say so, unsigned, and no Claude model stands in.
-- In Claude Code the agent runs as the harness's model: its transcript and its task name it (`Fix the parser · gpt-6-luna · high`), not a Claude model. The agent types' descriptions name a model each harness lists for you, refreshed at each session start.
-- A harness that compacts its own context shows it as a row, `Compacted conversation`, with pi's summary behind ctrl+o. So that Claude Code never compacts a `via` agent's copy of the conversation, which no model reads, `via` sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for the session, which sizes only non-Claude models, while a Claude model is the main one. It never touches a value you set, and undoes its own when `/model` switches to a non-Claude one. Another agent in the session on a non-Claude model gets the same window.
-- `via` uses each CLI's own login and stores no credentials.
-
-## Permissions
-
-- **Read-only** is what `via` enforces, in plan mode or with `tools: read`: Codex runs in its read-only sandbox with MCP servers and plugins off, OpenCode with only reading tools and no project config, pi with only its reading tools. agy is refused. So is Codex under a project's `.codex` folder and OpenCode under a project's `.opencode`, since both would load code from there before any permission applies.
-- **Otherwise** Codex works in its workspace sandbox and asks before going past it, as `codex exec` does; OpenCode, pi and agy run with their own permission settings, as when you run them yourself. A question a harness asks (Codex past its sandbox, OpenCode where its config says `ask`) reaches you in Claude Code's own dialog, with a notification, such as "codex wants to run `curl -sI https://example.com`. Allow it?"; only "Allow once" or "Deny" is offered, so nothing outlives the run. A dismissed or unanswered question, or a `claude -p` run with nobody to ask, is a deny. In bypass mode its questions are approved; in don't-ask mode, denied. pi and agy never ask.
-- The mode is the one at the agent's start, kept across its follow-ups and reloads: switching modes later doesn't change an agent already started.
-- Outside read-only, Codex runs with the working folder trusted (`codex-acp` sets it), so a project's `.codex/config.toml` loads, as if you had trusted the project in Codex. Outside a Git repository it edits without the refusal `codex exec` had.
+> - Each harness runs its own tools as you, with its own permission settings, outside Claude Code's. The one thing `via` enforces is read-only: plan mode, or `tools: read` at the top of the prompt. Codex, OpenCode and pi then can't write; agy refuses, because it can't.
+> - Outside read-only, a repository's `.codex`, `.opencode` and `.pi` config loads, as if you had trusted it. In a repository you didn't write, use `tools: read`; Codex and OpenCode then refuse one that carries its own config.
+> - pi and OpenCode are third-party clients. A subscription login there is subject to that provider's rules for third-party clients.
 
 ## Set up
 
@@ -44,7 +55,7 @@ Codex's tool calls fold into one line, as Claude Code folds its own (`Ran 4 comm
 
 3. **Restart Claude Code**, so it sees the harnesses on your PATH. Do the same after installing another harness.
 
-Tested on macOS. `via` is built on Claude Code's plugin hooks API, and CI tests it against the latest Claude Code every week, on macOS and Linux.
+Tested on macOS; CI also runs on Linux. Windows is untested.
 
 ## Use
 
@@ -64,6 +75,24 @@ tools: read
 thinking: high
 Why does the login test fail on CI but not locally?
 ```
+
+## How it works
+
+- At session start, `via` adds an agent type for each harness on your PATH: `via:codex`, `via:agy`, `via:opencode`, `via:pi`.
+- When Claude hands one a task, `via` runs that CLI headless with the prompt on stdin and streams its text, its tool calls and, where the harness reports it, its thinking. Codex and OpenCode run over the [Agent Client Protocol](https://agentclientprotocol.com) through a relay that ships with `via`, the ACP SDK bundled in. Codex's adapter, [`codex-acp`](https://github.com/agentclientprotocol/codex-acp), drives your own `codex`; on first use `via` installs it from the lockfile it ships (every package pinned and hash-checked, no install scripts, no Codex binary) into `~/.claude/via/acp/`.
+- Codex's and OpenCode's tool calls reach Claude Code as calls to `via`'s own tool, `step`, which runs nothing: `via` answers each with what the harness reported, and draws it as a row (`Ran npm test`, `Read file 'src/a.ts'`). `step` is an MCP server's tool, so Claude Code folds a run of them into one counted line, and the agent's line in the panel gets Claude Code's own summary. A call to `step` that `via` did not make is refused. pi's and agy's tool calls show as text lines (`▸ bash: npm test`), and their latest one in the agent panel; your own `subagentStatusLine` setting, if you have one, takes precedence there.
+- The harness's session id is kept, so a follow-up continues the same conversation, even after a reload. A plain `SendMessage` to a running Codex, OpenCode or pi agent reaches it at its next step, as a message typed while Claude works does; one starting `interrupt:` stops the current step and runs the message at once. agy takes messages only as follow-ups.
+- A completed answer ends with the model that wrote it, as the harness reports it; one taken from your `model:` line because the harness didn't confirm it is marked `(requested)`, and a harness that won't say gets `model not reported`, never a guess. Stopped or failed runs say so, unsigned, and no Claude model stands in.
+- In Claude Code the agent runs as the harness's model: its transcript and its task name it (`Fix the parser · gpt-6-luna · high`), not a Claude model. The agent types' descriptions name a model each harness lists for you, refreshed at each session start.
+- A harness that compacts its own context shows it as a row, `Compacted conversation`, with pi's summary behind ctrl+o. So that Claude Code never compacts a `via` agent's copy of the conversation, which no model reads, `via` sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for the session, which sizes only non-Claude models, while a Claude model is the main one. It never touches a value you set, and undoes its own when `/model` switches to a non-Claude one. Another agent in the session on a non-Claude model gets the same window.
+- `via` uses each CLI's own login and stores no credentials.
+
+## Permissions
+
+- **Read-only** is what `via` enforces, in plan mode or with `tools: read`: Codex runs in its read-only sandbox with MCP servers and plugins off, OpenCode with only reading tools and no project config, pi with only its reading tools. agy is refused. So is Codex under a project's `.codex` folder and OpenCode under a project's `.opencode`, since both would load code from there before any permission applies.
+- **Otherwise** Codex works in its workspace sandbox and asks before going past it, as `codex exec` does; OpenCode, pi and agy run with their own permission settings, as when you run them yourself. A question a harness asks (Codex past its sandbox, OpenCode where its config says `ask`) reaches you in Claude Code's own dialog, with a notification, such as "codex wants to run `curl -sI https://example.com`. Allow it?"; only "Allow once" or "Deny" is offered, so nothing outlives the run. A dismissed or unanswered question, or a `claude -p` run with nobody to ask, is a deny. In bypass mode its questions are approved; in don't-ask mode, denied. pi and agy never ask.
+- The mode is the one at the agent's start, kept across its follow-ups and reloads: switching modes later doesn't change an agent already started.
+- Outside read-only, Codex runs with the working folder trusted (`codex-acp` sets it), so a project's `.codex/config.toml` loads, as if you had trusted the project in Codex. Outside a Git repository it edits without the refusal `codex exec` had.
 
 ## Harnesses
 
