@@ -32,6 +32,11 @@ export type Steps = {
   calls: Map<string, { agentId: string; id: string }> // by tool_use_id: the harness's own call id
 }
 
+// What a run ended early answers its next step: an aborted run's end of turn, as drive's own.
+function ended(turnId: string): TurnStepResult {
+  return { turnId, index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+}
+
 // Stops a run no step will read again: a new turn, or the turn's end.
 export function endJob(w: Steps, agentId: string): void {
   const job = w.jobs.get(agentId)
@@ -74,7 +79,8 @@ export async function* pump(
       } else {
         const r = await job.gen.next()
         if (r.done) {
-          job.final = r.value
+          // A generator ended from outside returns nothing: without a final, this loop would spin.
+          job.final = r.value ?? ended(e.turnId)
           continue
         }
         c = r.value
@@ -126,7 +132,14 @@ export async function answerCall(
         w.calls.delete(toolUseId as string)
         return done.failed ? { result: done.output || 'failed', isError: true } : { result: done.output || NO_OUTPUT }
       }
-      if (job.final !== undefined || job.abort.signal.aborted) return { result: 'The harness run ended before this call finished.' }
+      if (job.final !== undefined) return { result: 'The harness run ended before this call finished.' }
+      // Aborted (Esc) with the run parked at a yield, which nothing would pull on to the race that stops it:
+      // ending it runs its cleanup, which stops the harness.
+      if (job.abort.signal.aborted) {
+        job.final ??= ended(job.turnId)
+        void job.gen.return(undefined as never).catch(() => {})
+        return { result: 'The harness run ended before this call finished.' }
+      }
       const r = await job.gen.next()
       if (r.done) {
         job.final = r.value

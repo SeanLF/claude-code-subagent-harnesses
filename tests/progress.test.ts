@@ -299,3 +299,37 @@ test('a folded run of harness calls is counted by what each did, in the order ea
   // A kind ACP adds later, or none at all, still counts.
   expect(texts(drawGroup(group(['think', undefined]))).join('')).toBe('2 other steps')
 })
+
+test('a run ended from outside while parked between pieces stops its harness', async () => {
+  let killed = false
+  const world = {
+    adapters: new Map([['pi', pi]]),
+    timeoutMinutes: 30,
+    inboxes: new Map(),
+    descriptions: new Map(),
+    activity: new Map(),
+  } as unknown as World
+  const $ = {
+    env: { get: async () => undefined },
+    fs: { write: async () => {} },
+    clock: { after: () => ({ cancel: () => {} }) },
+    process: {
+      spawn: async function* () {
+        try {
+          yield { stream: 'stdout' as const, text: `${[START, TOOL].map((event) => JSON.stringify(event)).join('\n')}\n` }
+          await new Promise(() => {})
+        } finally {
+          // The engine kills the child when its stream is returned.
+          killed = true
+        }
+      },
+    },
+    plugin: { root: '/' },
+  } as unknown as Parameters<typeof runHook>[2]
+  const input = { agentId: 'a1', choice: {}, prompt: 'go', signal: new AbortController().signal, mode: 'default' as const }
+  const stream = runHook(world, pi, $, { ...input, probe: async () => undefined, save: async () => {} } as never)
+  // Parked at its first chunk, as after a step that read this far; then ended, as endJob or an Esc does.
+  await stream.next()
+  await stream.return(undefined as never)
+  expect(killed).toBe(true)
+})

@@ -178,6 +178,7 @@ export async function* run(
   const pieces = child[Symbol.asyncIterator]()
   let timer: Timer | undefined
   let stopped: 'limit' | 'abort' | undefined
+  let exited = false
   try {
     const until = new Promise<'limit' | 'abort'>((resolve) => {
       if (signal.aborted) resolve('abort')
@@ -193,7 +194,10 @@ export async function* run(
         stopped = first.kind
         break
       }
-      if (first.piece.done) break
+      if (first.piece.done) {
+        exited = true
+        break
+      }
       const piece = first.piece.value
       if (piece.stream === 'stderr') {
         stderr += piece.text
@@ -241,6 +245,9 @@ export async function* run(
   } catch (err) {
     failure = `${adapter.name} could not run (is it installed and on PATH?): ${String(err)}`
   } finally {
+    // However the run ends, its harness ends with it: a limit, an Esc, or a step no hook reads on. Not
+    // awaited, so a child slow to go cannot hold up the rest.
+    if (!exited) void Promise.resolve(pieces.return?.(undefined as never)).catch(() => {})
     timer?.cancel()
     w.activity.delete(agentId)
     await row('')
@@ -254,14 +261,7 @@ export async function* run(
         : 'the run ended before this call finished',
   )
 
-  if (stopped !== undefined) {
-    try {
-      await pieces.return?.(undefined as never)
-    } catch {
-      // The harness was already gone; the limit or the interrupt ended it.
-    }
-    if (stopped === 'abort') return { aborted: true, signed: '', usage: null, block: index }
-  }
+  if (stopped === 'abort') return { aborted: true, signed: '', usage: null, block: index }
 
   // The abort's own failure is not the answer: the interrupt's message runs next, after the steers it cut off.
   // A run that finished before the abort, or hit the time limit, keeps its answer; the interrupt is undelivered.

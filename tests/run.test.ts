@@ -1,6 +1,6 @@
 import type { TurnStepChunk, TurnStepResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-
+import { answerCall, pump } from '../hooks/acp/steps'
 import { pi } from '../hooks/adapters/pi'
 import { turnStep } from '../hooks/turn'
 import type { World } from '../hooks/world'
@@ -593,4 +593,32 @@ test('plan mode overrides a pi tools line that could write, so pi still gets onl
   await run($)
   expect(spawns[0]?.argv).toEqual(expect.arrayContaining(['--tools', 'read,grep,find,ls', '-na']))
   expect(spawns[0]?.argv).not.toContain('bash,edit')
+})
+
+test('an Esc that finds the run parked between steps ends the run, so its harness stops, not only the wait', async () => {
+  let cleaned = false
+  const gen = (async function* () {
+    try {
+      yield { kind: 'call-start' as const, id: 'c1', input: { kind: 'execute', title: 'sleep 60' }, usage: null }
+      yield { kind: 'call-start' as const, id: 'c2', input: { kind: 'execute', title: 'never' }, usage: null }
+    } finally {
+      // Where run stops the harness.
+      cleaned = true
+    }
+    return { stopReason: 'end_turn' } as never
+  })()
+  // Parked at its first yield, as after the step that issued the call.
+  await gen.next()
+  const job = { turnId: 't1', gen, held: [], outputs: new Map(), abort: new AbortController(), count: 0 }
+  const w = { tool: 'mcp__plugin_via_step__step', jobs: new Map([['a1', job]]), calls: new Map([['toolu_1', { agentId: 'a1', id: 'c1' }]]) }
+  const esc = new AbortController()
+  esc.abort()
+  expect(await answerCall(w, 'toolu_1', esc.signal)).toEqual({ result: 'The harness run ended before this call finished.' })
+  await Promise.resolve()
+  expect(cleaned).toBe(true)
+  // A step that still reads the ended run ends the turn, never spins on it.
+  const next = pump(w, job, { turnId: 't1', index: 1, agentId: 'a1' }, new AbortController().signal)
+  let r = await next.next()
+  while (!r.done) r = await next.next()
+  expect(r.value.stopReason).toBe('end_turn')
 })
