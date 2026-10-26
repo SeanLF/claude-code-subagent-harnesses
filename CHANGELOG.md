@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.6.0...via-v0.7.0) (2026-10-26)
+
+
+### Features
+
+* via agents run as the harness's model, show its compactions, and list the models it offers ([de199ef](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/de199efbbd98980866159b3953c91707a0737efb))
+
 ## [0.6.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.5.1...via-v0.6.0) (2026-10-26)
 
 
