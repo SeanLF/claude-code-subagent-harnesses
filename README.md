@@ -6,20 +6,11 @@ Called through Bash, another agent CLI blocks until it finishes, then dumps its 
 
 Spend the quotas you already pay for, while Claude stays in charge: hand subtasks to Codex on your ChatGPT plan, Antigravity on your Google account, pi on a ChatGPT, Copilot or OpenRouter login, or OpenCode's free models. Each runs on its own official login, several at once if you like, and `via` stores no credentials. It's also a quick way to get a second model's read on Claude's work.
 
-A real run of `via:codex`, as its view shows it in Claude Code (the path trimmed), asked to run `ls`, `cat notes.txt`, `sleep 40`, `wc -l notes.txt` and `false`, then give the line count:
+A `via:codex` agent's view in Claude Code:
 
-```text
-List files
-Read file '…/notes.txt'
-Ran sleep 40
-Ran wc -l notes.txt
-Ran false
-  ⎿  failed
-⏺ 2 lines.
-  — answered by codex, gpt-6.1-sol
-```
+![A via:codex agent view in Claude Code: its steps folded into lines such as "Ran 4 commands", and the agent panel row "via:codex Checking budget counts in home.ts"](https://github.com/user-attachments/assets/e36113c3-b375-4f0d-99ae-5851e73105e9)
 
-Each of Codex's tool calls is a row of its own, `Running` while it runs, and the agent's line in the panel carries Claude Code's own summary of what it is doing, its time and its tokens.
+Codex's tool calls fold into one line, as Claude Code folds its own (`Ran 4 commands`, `Running 3 commands…` while they run); a click or ctrl+o shows each call with its output. The agent's line in the panel carries Claude Code's own summary of what it is doing.
 
 > [!IMPORTANT]
 > Each harness runs its own tools as you, with its own permission settings, outside Claude Code's. The one thing `via` enforces is read-only: plan mode, or `tools: read` at the top of the prompt. Codex, OpenCode and pi then can't write; agy refuses, because it can't.
@@ -28,7 +19,7 @@ Each of Codex's tool calls is a row of its own, `Running` while it runs, and the
 
 - At session start, `via` adds an agent type for each harness on your PATH: `via:codex`, `via:agy`, `via:opencode`, `via:pi`.
 - When Claude hands one a task, `via` runs that CLI headless with the prompt on stdin and streams its text, its tool calls and, where the harness reports it, its thinking. Codex and OpenCode run over the [Agent Client Protocol](https://agentclientprotocol.com) through a relay that ships with `via`, the ACP SDK bundled in. Codex's adapter, [`codex-acp`](https://github.com/agentclientprotocol/codex-acp), drives your own `codex`; on first use `via` installs it from the lockfile it ships (every package pinned and hash-checked, no install scripts, no Codex binary) into `~/.claude/via/acp/`.
-- Codex's and OpenCode's tool calls reach Claude Code as calls to `via`'s own tool, `step`, which runs nothing: `via` answers each with what the harness reported, and draws it as a row (`Ran npm test`, `Read file 'src/a.ts'`). So the agent's view shows them in concise mode, and its line in the agent panel gets Claude Code's own summary. A call to `step` that `via` did not make is refused. pi's and agy's tool calls show as text lines (`▸ bash: npm test`), and their latest one in the agent panel; your own `subagentStatusLine` setting, if you have one, takes precedence there.
+- Codex's and OpenCode's tool calls reach Claude Code as calls to `via`'s own tool, `step`, which runs nothing: `via` answers each with what the harness reported, and draws it as a row (`Ran npm test`, `Read file 'src/a.ts'`). `step` is an MCP server's tool, so Claude Code folds a run of them into one counted line, and the agent's line in the panel gets Claude Code's own summary. A call to `step` that `via` did not make is refused. pi's and agy's tool calls show as text lines (`▸ bash: npm test`), and their latest one in the agent panel; your own `subagentStatusLine` setting, if you have one, takes precedence there.
 - The harness's session id is kept, so a follow-up continues the same conversation, even after a reload. A plain `SendMessage` to a running Codex, OpenCode or pi agent reaches it at its next step, as a message typed while Claude works does; one starting `interrupt:` stops the current step and runs the message at once. agy takes messages only as follow-ups.
 - A completed answer ends with the model that wrote it, as the harness reports it; one taken from your `model:` line because the harness didn't confirm it is marked `(requested)`, and a harness that won't say gets `model not reported`, never a guess. Stopped or failed runs say so, unsigned, and no Claude model stands in.
 - `via` uses each CLI's own login and stores no credentials.
