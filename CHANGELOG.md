@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.5.1...via-v0.6.0) (2026-10-26)
+
+
+### Features
+
+* pi subagents show native tool rows, diffs and command output ([7e78f3c](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/7e78f3c32965654720d0142b9cc298485b14c128))
+
 ## [0.5.1](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.5.0...via-v0.5.1) (2026-10-26)
 
 
