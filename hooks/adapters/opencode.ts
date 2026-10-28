@@ -49,7 +49,7 @@ export const opencode = {
   about: "OpenCode CLI agent: any provider's model, including OpenCode's free ones, own tools (edits files).",
   catalogue: { argv: ['opencode', 'models'], ids: (stdout: string) => stdout.split('\n').map((line) => line.trim()) },
   readOnly: 'enforced',
-  tools: ['read'],
+  tools: ['read', 'write'], // write: the same as no tools line, which an agent may not think to leave out
   thinking: THINKING,
   steer: true,
   defaultModel: false,

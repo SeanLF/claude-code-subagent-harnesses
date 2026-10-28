@@ -408,6 +408,36 @@ test('a model the agent refuses is a failure in plain words, unsigned', async ($
   expect(result.usage).toBeNull()
 })
 
+test('a refused model names the closest models codex offers', async ($, on) => {
+  arrange(on, [], {
+    stdout: lines([
+      { relay: 'session', sessionId: SID },
+      { relay: 'error', message: 'the agent refused model gpt-6-lunar: Invalid params' },
+    ]),
+    code: 1,
+  })
+  on('store.get', (_, e, next) => (e.key === 'models.codex' ? { value: ['gpt-6.1-sol', 'gpt-6-luna', 'o9-mini'] } : next(e)))
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'model: gpt-6-lunar\ngo' })
+  const { result } = await runTurn($)
+  expect(result.answer).toContain('refused model gpt-6-lunar')
+  expect(result.answer).toContain('Did you mean gpt-6-luna, gpt-6.1-sol?')
+})
+
+test('a failure that names an offered model, such as a rate limit, suggests nothing', async ($, on) => {
+  arrange(on, [], {
+    stdout: lines([
+      { relay: 'session', sessionId: SID },
+      { relay: 'error', message: 'rate limited for gpt-6-luna, try again later' },
+    ]),
+    code: 1,
+  })
+  on('store.get', (_, e, next) => (e.key === 'models.codex' ? { value: ['gpt-6.1-sol', 'gpt-6-luna'] } : next(e)))
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'model: gpt-6-luna\ngo' })
+  const { result } = await runTurn($)
+  expect(result.answer).toContain('rate limited for gpt-6-luna')
+  expect(result.answer).not.toContain('Did you mean')
+})
+
 test('the first codex run installs the pinned codex-acp with npm ci, no scripts and no Codex binary, then runs it', async ($, on) => {
   const spawns: Spawn[] = []
   const writes: Write[] = []

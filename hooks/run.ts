@@ -3,14 +3,18 @@ import type { Choice } from '../types'
 import type { Mark } from './acp/steps'
 import type { Adapter, Ask, Mode } from './adapter'
 import { stepOf } from './progress'
+import { nearestModels } from './prompt'
 import { finish, type Totals } from './report'
 import type { Inbox } from './steer'
 import { answerAsk, closeInbox, undeliveredSteers } from './steer'
 import type { World } from './world'
 
 const ANSI = /\u001b\[[0-9;]*m/g
+const MISSING_MODEL = /refused model|model.*not found|not found.*model|unknown model|invalid model|no such model|model.*does not exist/i
 export const notActive = (name: string) =>
   `The via plugin did not run this task, so ${name} did not answer it. Check the plugin is loaded in /plugin and restart Claude Code.`
+export const cutOff = (name: string) =>
+  `This ${name} run was cut off before it answered, as happens when the session is sent to the background. Send the task again to run it.`
 export const notActivePrompt = (name: string) =>
   `You are not ${name}: this plugin did not take this step. Use no tools and do not attempt the task. Reply with exactly this and nothing else:\n\n${notActive(name)}`
 // interrupted: an `interrupt:` message aborted the harness on purpose; next is what to run in its place.
@@ -26,6 +30,7 @@ export type RunInput = {
   guard: Readonly<Record<string, string>> | undefined
   mode: Mode
   installed?: string
+  models?: readonly string[] // the harness's offered models, for a refused model's nearest
   // Awaited only to sign, so a probe never delays the run or outlives an interrupted one.
   probe(session: string | undefined): Promise<string | undefined>
   save(session: string): Promise<void>
@@ -37,7 +42,7 @@ export async function* run(
   w: World,
   adapter: Adapter,
   $: Pick<EngineInterface, 'process' | 'clock' | 'plugin' | 'fs' | 'env' | 'ui'>,
-  { agentId, choice, prompt, signal, inbox, session, block = 0, guard, mode, installed, probe, save }: RunInput,
+  { agentId, choice, prompt, signal, inbox, session, block = 0, guard, mode, installed, models = [], probe, save }: RunInput,
 ): AsyncGenerator<TurnStepChunk | Mark, RunResult> {
   const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
   const row = async (text: string) => {
@@ -243,6 +248,14 @@ export async function* run(
             ? `${adapter.name} exited with ${exit.code ?? exit.signal}.\n${why}`
             : `${adapter.name} ended with no answer.\n${why}`
       }
+      // Only a model the harness turned away, and not one it offers: a rate limit naming a good model is not that.
+      const refused =
+        choice.model &&
+        !models.includes(choice.model) &&
+        failure.toLowerCase().includes(choice.model.toLowerCase()) &&
+        MISSING_MODEL.test(failure)
+      const near = refused && choice.model ? nearestModels(choice.model, models) : []
+      if (near.length > 0) failure += `\nDid you mean ${near.join(', ')}?`
     } else {
       const tail = take(buffer)
       if (stopped === 'limit') yield* tail

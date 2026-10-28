@@ -17,6 +17,7 @@ export type World = Steps & {
   handbacks: Map<string, boolean>
   modes: Map<string, string> // Claude Code's permission mode at the spawn
   agents: Map<string, Adapter>
+  roster?: Promise<void> // spawns write the stored roster one at a time, or parallel spawns drop each other
   others: Set<string>
   inboxes: Map<string, Inbox>
   descriptions: Map<string, string> // the spawn's Agent description, for its panel row

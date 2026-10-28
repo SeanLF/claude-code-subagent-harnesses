@@ -86,7 +86,8 @@ export function helpOf(adapter: HelpAdapter, models: readonly string[]): string 
     `model: <pattern>    passed to ${adapter.bin} as its model.${offered}${adapter.models ? ` ${adapter.models}` : ''}`,
   ]
   if (adapter.readOnly === 'none') lines.push(`tools:              refused: ${name} cannot enforce read-only tools.`)
-  else if (adapter.tools) lines.push(`tools: read         ${name} runs read-only and cannot edit files; without a tools line it can.`)
+  else if (adapter.tools)
+    lines.push(`tools: read|write   read: ${name} runs read-only and cannot edit files. write, or no tools line: it can.`)
   else
     lines.push(
       `tools: <list>       passed to ${name} as its tool list: read is read-only; any other list, such as -bash,read, can still edit and loads the project's .pi extensions.`,
@@ -118,4 +119,30 @@ export function descriptionOf(adapter: HelpAdapter, models: readonly string[]): 
   if (adapter.thinking.length > 0) top.push('`thinking: high`')
   const steer = adapter.steer ? ' SendMessage steers it mid-run; one starting `interrupt:` stops its current step first.' : ''
   return `${adapter.about} Top lines: ${top.join(' ')}. \`via-help\` for more.${steer}`
+}
+
+// The offered models closest to one a harness refused, by shared name parts (deepseek, v4, free).
+// The provider, before the first slash, never counts alone: every one of its models shares it.
+export function nearestModels(asked: string, models: readonly string[], count = 3): string[] {
+  const parts = (id: string) =>
+    new Set(
+      id
+        .toLowerCase()
+        .split(/[/\-_.:~@+\s]+/)
+        .filter(Boolean),
+    )
+  const provider = (id: string) => (id.includes('/') ? id.slice(0, id.indexOf('/')).toLowerCase() : '')
+  const want = parts(asked)
+  return models
+    .filter((id) => id !== asked)
+    .map((id) => {
+      const have = parts(id)
+      const shared = [...have].filter((p) => want.has(p))
+      const named = shared.filter((p) => p !== provider(id)).length
+      return { id, named, score: shared.length / new Set([...want, ...have]).size }
+    })
+    .filter((m) => m.named > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, count)
+    .map((m) => m.id)
 }

@@ -4,7 +4,7 @@ import { agy } from '../hooks/adapters/agy'
 import { codex } from '../hooks/adapters/codex'
 import { opencode } from '../hooks/adapters/opencode'
 import { pi } from '../hooks/adapters/pi'
-import { descriptionOf, helpOf, promptOf } from '../hooks/prompt'
+import { descriptionOf, helpOf, nearestModels, promptOf } from '../hooks/prompt'
 import { unwrapped } from '../hooks/register'
 
 const HELP = helpOf(pi, [])
@@ -303,4 +303,28 @@ test('only the whole coordinator wrapper is taken off; a message quoting it is l
   expect(unwrapped(quoted)).toBe(quoted)
   const unended = 'The coordinator sent a message while you were working:\nx'
   expect(unwrapped(unended)).toBe(unended)
+})
+
+test('a refused model is matched to the offered ones that share its name parts, closest first', () => {
+  const offered = [
+    'opencode/beam-free',
+    'opencode/deepseek-v4.1-flash-free',
+    'openrouter/deepseek/deepseek-v4-flash',
+    'opencode/glm-5.3-flash-free',
+    'openrouter/~anthropic/claude-fable-latest',
+  ]
+  expect(nearestModels('opencode/deepseek-v4-free', offered)).toEqual([
+    'opencode/deepseek-v4.1-flash-free',
+    'opencode/beam-free',
+    'openrouter/deepseek/deepseek-v4-flash',
+  ])
+  // The provider alone matches nothing: every opencode model shares it.
+  expect(nearestModels('opencode/zzz', offered)).toEqual([])
+  expect(nearestModels('gpt-6-luna', [])).toEqual([])
+})
+
+test('tools: write is the same as no tools line where read is the only restriction', () => {
+  expect(promptOf('tools: write\ngo', opencode)).toEqual({ prompt: 'go', tools: 'write' })
+  expect(promptOf('tools: write\ngo', codex).error).toBeUndefined()
+  expect(promptOf('tools: edit\ngo', opencode).error).toContain('read, write')
 })

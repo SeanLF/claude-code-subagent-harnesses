@@ -62,7 +62,7 @@ export const codex = {
     },
   },
   readOnly: 'enforced',
-  tools: ['read'],
+  tools: ['read', 'write'], // write: the same as no tools line, which an agent may not think to leave out
   thinking: THINKING,
   steer: true,
   defaultModel: false,

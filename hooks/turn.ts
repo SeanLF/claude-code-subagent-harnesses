@@ -5,16 +5,49 @@ import type { Adapter, Mode } from './adapter'
 import { deliver, handbackAsked, respond, textChunks } from './handback'
 import { cachedModels } from './models'
 import { helpOf, isModel, promptOf } from './prompt'
-import { notActive, type RunResult, run } from './run'
+import { cutOff, type RunResult, run } from './run'
 import { openInbox } from './steer'
 import type { World } from './world'
 
 type StepHook = StreamHook<'turn.step'>
 
+// Each via agent's harness and handback, kept across processes in $.store: a session sent to the
+// background continues in a new process, with none of the spawn's state. The newest ROSTER_KEPT.
+const ROSTER = 'agents'
+const ROSTER_KEPT = 200
+type Kept = { harness: string; handback: boolean }
+async function roster($: Pick<EngineInterface, 'store'>): Promise<Record<string, Kept>> {
+  const stored = await $.store.get(ROSTER).catch(() => undefined)
+  if (typeof stored !== 'object' || stored === null) return {}
+  return Object.fromEntries(
+    Object.entries(stored as Record<string, unknown>).filter(
+      (entry): entry is [string, Kept] => typeof (entry[1] as Kept | null)?.harness === 'string',
+    ),
+  )
+}
+export function remember(w: World, $: Pick<EngineInterface, 'store'>, agentId: string, kept: Kept): Promise<void> {
+  const write = async () => {
+    const others = Object.entries(await roster($))
+      .filter(([id]) => id !== agentId)
+      .slice(-(ROSTER_KEPT - 1))
+    await $.store.set(ROSTER, Object.fromEntries([...others, [agentId, kept]])).catch(() => undefined)
+  }
+  w.roster = (w.roster ?? Promise.resolve()).then(write)
+  return w.roster
+}
+
 export async function adapterOf(w: World, $: Parameters<StepHook>[0], agentId: string): Promise<Adapter | undefined> {
   if (w.others.has(agentId)) return undefined
   const known = w.agents.get(agentId)
   if (known) return known
+  // Ahead of agent.list: the new process of a session sent to the background resumes the agent as
+  // general-purpose. Its step would go to Claude under the harness's model name.
+  const kept = (await roster($))[agentId]
+  const remembered = kept ? w.adapters.get(kept.harness) : undefined
+  if (remembered) {
+    w.agents.set(agentId, remembered)
+    return remembered
+  }
   const agent = (await $.agent.list()).find((a) => a.id === agentId)
   // Not listed yet: decide on a later step rather than caching a guess.
   if (agent === undefined) return undefined
@@ -28,7 +61,8 @@ export async function adapterOf(w: World, $: Parameters<StepHook>[0], agentId: s
 // Persisted first: a reload forgets the map but not the decision.
 async function handbackOf(w: World, $: Parameters<StepHook>[0], agentId: string): Promise<boolean> {
   const saved = (await $.state.get({ plugin: 'via', key: 'handbacks', id: agentId })).value
-  return saved === true || w.handbacks.get(agentId) === true || (await handbackAsked($, agentId))
+  if (saved === true || w.handbacks.get(agentId) === true || (await handbackAsked($, agentId))) return true
+  return (await roster($))[agentId]?.handback === true
 }
 
 // Walks up from the session's folder: relative paths resolve there, and the root is its own parent.
@@ -191,7 +225,16 @@ async function* begin(
       }
       return yield* respond(e, textChunks(saved), saved)
     }
-    return yield* respond(e, textChunks(notActive(adapter.name)), notActive(adapter.name))
+    // This hook runs, so via is loaded: the turn was lost, in a session sent to the background (its new
+    // process resumes the agent without a turn.start) or a reload mid-run, not never run.
+    // Handed back once: the step after the handback has no turn either, and must not hand back again.
+    const said = cutOff(adapter.name)
+    const handed = (await $.state.get({ plugin: 'via', key: 'handedBack', id: agentId })).value === true
+    if (!handed && (await handbackOf(w, $, agentId))) {
+      await $.state.set({ plugin: 'via', key: 'handedBack', id: agentId }, true)
+      return yield* deliver(adapter.name, e, { prompt: '', report: said, delivered: false }, 0, said, null)
+    }
+    return yield* respond(e, textChunks(said), said)
   }
   if (turn.delivered) return yield* respond(e, textChunks(turn.report ?? ''), turn.report ?? '')
   if (turn.report !== undefined) {
@@ -302,6 +345,7 @@ async function* drive(w: World, $: EngineInterface, d: Drive): AsyncGenerator<Tu
   let prompt = d.prompt
   let block = 0
   let result: RunResult
+  const models = chosen.model ? await cachedModels($, adapter, w.defaultModel) : []
   // An interrupted run is followed at once by its message, on the same session.
   for (;;) {
     const session = (await $.state.get({ plugin: 'via', key: 'sessions', id: agentId })).value
@@ -315,6 +359,7 @@ async function* drive(w: World, $: EngineInterface, d: Drive): AsyncGenerator<Tu
       session,
       mode,
       installed,
+      models,
       block,
       guard,
       probe,

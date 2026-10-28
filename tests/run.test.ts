@@ -296,10 +296,60 @@ test('a step with no turn hands back a saved report that was never delivered', a
   expect(again.result.toolUses).toEqual([])
 })
 
-test('a step with no turn and no saved report still answers the stub', async ($, on) => {
+// Captured 2026-10-28: /background right after a via:opencode spawn. The new process resumed the agent
+// with no turn.start, and via answered "check the plugin is loaded" while loaded (third-cut session 858bcc0d).
+test('a step with no turn and no saved report says the run was cut off, not that via is missing', async ($, on) => {
   arrange(on, [], split(lines))
   const { result } = await run($, { ...STEP, turnId: 't3' })
-  expect(result.answer).toContain('did not run this task')
+  expect(result.answer).toContain('pi run was cut off before it answered')
+  expect(result.answer).not.toContain('did not run this task')
+})
+
+test('a spawn keeps its harness in the store, and parallel spawns keep each other', async ($, on) => {
+  const store = new Map<string, unknown>()
+  on('store.get', (_, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('agent.spawn', (_, e) => ({ model: 'haiku', agentId: e.prompt === 'two' ? 'a2' : 'a1' }))
+  const spawn = (prompt: string) =>
+    $.agent.spawn({
+      tool_use_id: `toolu_${prompt}`,
+      subagentType: 'via:pi',
+      prompt,
+      description: 'd',
+      provider: { plugin: 'engine', tier: 'core' },
+      parentModel: 'haiku',
+      background: true,
+      fork: false,
+    })
+  await Promise.all([spawn('one'), spawn('two')])
+  expect(store.get('agents')).toEqual({ a1: { harness: 'pi', handback: false }, a2: { harness: 'pi', handback: false } })
+})
+
+// Seen 2026-10-28 after /background: the new process saw no spawn and resumed the agent as general-purpose.
+test("a step from an agent the old process spawned is still via's, not passed to Claude", async ($, on) => {
+  mock.env(on, ENV)
+  node(on)
+  on('agent.list', () => ({ value: [{ id: 'a1', description: 'x', type: 'general-purpose', status: 'running' }] }))
+  on('store.get', (_, e) => ({ value: e.key === 'agents' ? { a1: { harness: 'pi', handback: true } } : undefined }))
+  on('session.messages', () => ({ value: [] }))
+  let passed = false
+  // biome-ignore lint/correctness/useYield: a streaming hook must be an async generator, even one that answers at once
+  on('turn.step', async function* (_, e) {
+    passed = true
+    return { turnId: e.turnId, index: e.index, answer: 'from Claude', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  const { result } = await run($)
+  expect(passed).toBe(false)
+  // An auto-mode spawn's handback holds in the new process too, or Claude Code asks for it three times.
+  expect(result.toolUses[0]?.name).toBe('SubagentHandback')
+  expect(JSON.stringify(result.toolUses[0]?.input)).toContain('pi run was cut off before it answered')
+  // The step after the handback's tool result has no turn either.
+  const after = await run($, { ...STEP, index: 1 })
+  expect(after.result.toolUses).toEqual([])
+  expect(after.result.answer).toContain('pi run was cut off before it answered')
 })
 
 async function drain(stream: AsyncGenerator<TurnStepChunk, TurnStepResult>): Promise<{ chunks: TurnStepChunk[]; result: TurnStepResult }> {
@@ -367,6 +417,7 @@ test('an aborted follow-up leaves no report for a step with no turn to repeat', 
     },
     plugin: { root: '/' },
     session: { messages: async () => [] },
+    store: { get: async () => undefined, set: async () => {} },
     state: {
       get: async (ref: { key: string; id: string }) => ({ value: state.get(`${ref.key}:${ref.id}`), version: 1 }),
       set: async (ref: { key: string; id: string }, value: unknown) => {
@@ -392,7 +443,7 @@ test('an aborted follow-up leaves no report for a step with no turn to repeat', 
   expect(state.get('reports:a1')).toBe('')
 
   const third = await drain(turnStep(world, $, { ...e, turnId: 't3' }, next))
-  expect(third.result.answer).toContain('did not run this task')
+  expect(third.result.answer).toContain('was cut off before it answered')
   expect(third.result.answer).not.toContain('all done')
 })
 

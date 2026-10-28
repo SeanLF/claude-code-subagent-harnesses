@@ -7,7 +7,7 @@ import { cachedModels, refreshModels } from './models'
 import { descriptionOf, isModel, promptOf } from './prompt'
 import { notActivePrompt } from './run'
 import { sendMessage } from './steer'
-import { adapterOf, turnStep } from './turn'
+import { adapterOf, remember, turnStep } from './turn'
 import type { World } from './world'
 
 // Only harnesses installed at session start get an agent type: each description rides on every request.
@@ -174,6 +174,7 @@ export const register: Register = (on, options) => {
       const handback = e.permissionMode === 'auto' && local
       // Persisted: a reload loses this map but must not lose the decision.
       world.handbacks.set(started.agentId, handback)
+      await remember(world, $, started.agentId, { harness: adapter.name, handback })
       await $.state.set({ plugin: 'via', key: 'handbacks', id: started.agentId }, handback)
       await $.state.set({ plugin: 'via', key: 'modes', id: started.agentId }, e.permissionMode ?? 'default')
     }
