@@ -321,6 +321,8 @@ test('a refused model is matched to the offered ones that share its name parts, 
   // The provider alone matches nothing: every opencode model shares it.
   expect(nearestModels('opencode/zzz', offered)).toEqual([])
   expect(nearestModels('gpt-6-luna', [])).toEqual([])
+  // Captured 2026-10-28 from codex's list: a tie on name parts goes to the longest common start.
+  expect(nearestModels('gpt-6-lunar', ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'])[0]).toBe('gpt-6-luna')
 })
 
 test('tools: write is the same as no tools line where read is the only restriction', () => {

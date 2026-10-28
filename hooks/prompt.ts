@@ -133,16 +133,21 @@ export function nearestModels(asked: string, models: readonly string[], count = 
     )
   const provider = (id: string) => (id.includes('/') ? id.slice(0, id.indexOf('/')).toLowerCase() : '')
   const want = parts(asked)
-  return models
-    .filter((id) => id !== asked)
-    .map((id) => {
-      const have = parts(id)
-      const shared = [...have].filter((p) => want.has(p))
-      const named = shared.filter((p) => p !== provider(id)).length
-      return { id, named, score: shared.length / new Set([...want, ...have]).size }
-    })
-    .filter((m) => m.named > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, count)
-    .map((m) => m.id)
+  return (
+    models
+      .filter((id) => id !== asked)
+      .map((id) => {
+        const have = parts(id)
+        const shared = [...have].filter((p) => want.has(p))
+        const named = shared.filter((p) => p !== provider(id)).length
+        let prefix = 0
+        while (prefix < id.length && id[prefix]?.toLowerCase() === asked[prefix]?.toLowerCase()) prefix += 1
+        return { id, named, prefix, score: shared.length / new Set([...want, ...have]).size }
+      })
+      .filter((m) => m.named > 0)
+      // Ties (gpt-6-lunar shares gpt and 6 with every gpt-6 model) go to the longest common start.
+      .sort((a, b) => b.score - a.score || b.prefix - a.prefix)
+      .slice(0, count)
+      .map((m) => m.id)
+  )
 }
