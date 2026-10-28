@@ -18,6 +18,67 @@ test('a SendMessage to a live pi agent is steered into its inbox', async ($, on)
   await pending
 })
 
+// Captured 2026-10-28: a message typed into a running via agent's view reaches it only as this attachment,
+// at its next step, which no model reads.
+const TYPED = (text: string) =>
+  `<system-reminder>\nThe user sent a new message while you were working:\n${text}\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.\n</system-reminder>`
+const QUEUED = (agentId: string, text: string) => ({
+  message: {
+    type: 'attachment' as const,
+    name: 'queued_command',
+    role: 'user' as const,
+    isMeta: true as const,
+    content: [{ type: 'text' as const, text: TYPED(text) }],
+  },
+  door: 'attachment' as const,
+  origin: { kind: 'composer' as const },
+  uuid: 'u1',
+  agentId,
+})
+
+test("a message typed into a running pi agent's view is steered into its inbox, an interrupt too", async ($, on) => {
+  const clock = mock.clock(on)
+  const spawns: Spawn[] = []
+  const writes: Write[] = []
+  hang(on, spawns, writes)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const pending = run($)
+  await clock.settle()
+  await $.session.append(QUEUED('a1', 'also do B\non two lines'))
+  expect(writes.at(-1)?.path).toBe('/home/u/.claude/via/inbox/pi-a1.jsonl')
+  expect(writes.at(-1)?.text.split('\n')).toContain(JSON.stringify('also do B\non two lines'))
+  await $.session.append(QUEUED('a1', 'interrupt: stop and do C'))
+  expect(writes.at(-1)?.text.split('\n')).toContain(JSON.stringify({ interrupt: 'stop and do C' }))
+  await clock.advance(30 * 60 * 1000)
+  await pending
+})
+
+test('an attachment for an agent with no live run, or of another kind, writes nothing', async ($, on) => {
+  const writes: Write[] = []
+  bottom(on, writes)
+  await $.session.append(QUEUED('a1', 'later'))
+  await $.session.append({ ...QUEUED('a1', 'x'), message: { ...QUEUED('a1', 'x').message, name: 'nested_memory' } })
+  expect(writes).toEqual([])
+})
+
+test("a queued delivery the person did not type, or whose framing is not a typed message's, never steers", async ($, on) => {
+  const clock = mock.clock(on)
+  const spawns: Spawn[] = []
+  const writes: Write[] = []
+  hang(on, spawns, writes)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const pending = run($)
+  await clock.settle()
+  const before = writes.length
+  // Found by review: a nested agent's end, a peer's or a channel's message ride the same attachment.
+  await $.session.append({ ...QUEUED('a1', 'from a notification'), origin: { kind: 'task-notification' } })
+  const raw = { type: 'text' as const, text: '<task-notification>\n<status>completed</status>\n</task-notification>' }
+  await $.session.append({ ...QUEUED('a1', 'x'), message: { ...QUEUED('a1', 'x').message, content: [raw] } })
+  expect(writes.length).toBe(before)
+  await clock.advance(30 * 60 * 1000)
+  await pending
+})
+
 test('a SendMessage to an agent with no live run becomes a follow-up', async ($, on) => {
   const writes: Write[] = []
   bottom(on, writes)

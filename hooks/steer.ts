@@ -69,13 +69,39 @@ export async function sendMessage(w: World, $: Parameters<SendHook>[0], e: Param
   }
   // An idle-notice subscription is the engine's to keep, so the call goes on to it.
   if (inbox === undefined || message === undefined || e.notify_when_idle) return next(e)
+  const interrupted = await steer($, inbox, message)
+  return { result: { success: true, message: interrupted ? interruptDelivered(inbox.name) : steerDelivered(inbox.name) } }
+}
+
+// A message for a running harness, into its inbox: a steer, or with `interrupt:` an interrupt, whose
+// message runs next. True for an interrupt.
+export async function steer($: Pick<EngineInterface, 'fs'>, inbox: Inbox, message: string): Promise<boolean> {
   const asked = INTERRUPT.test(message) ? message.replace(INTERRUPT, '') : undefined
   const lines = [...inbox.lines, JSON.stringify(asked === undefined ? message : { interrupt: asked })]
-  await $.fs.write(inbox.path, lines.map((line) => `${line}\n`).join(''))
+  // Taken before the write: a typed message and a SendMessage at once would otherwise drop one another.
   inbox.lines = lines
-  if (asked === undefined) return { result: { success: true, message: steerDelivered(inbox.name) } }
+  await $.fs.write(inbox.path, lines.map((line) => `${line}\n`).join(''))
+  if (asked === undefined) return false
   inbox.interrupt = inbox.interrupt === undefined ? asked : `${inbox.interrupt}\n\n${asked}`
-  return { result: { success: true, message: interruptDelivered(inbox.name) } }
+  return true
+}
+
+// What the person typed into an agent's view while it ran, from the attachment Claude Code delivers at
+// the agent's next step ("The user sent a new message while you were working: ..."); '' when the framing
+// is not that one, never a guess: other deliveries share the attachment.
+export function typed(content: readonly unknown[]): string {
+  const text = content
+    .map((block) =>
+      typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text'
+        ? String((block as { text?: unknown }).text ?? '')
+        : '',
+    )
+    .join('')
+  return (
+    /^<system-reminder>\nThe user sent a new message while you were working:\n([\s\S]*?)\n\nThis is how Claude Code/
+      .exec(text)?.[1]
+      ?.trim() ?? ''
+  )
 }
 
 const VERB: Record<string, string> = { execute: 'run', edit: 'edit', delete: 'delete', move: 'move', fetch: 'fetch', read: 'read' }

@@ -7,7 +7,7 @@ import { HARNESSES } from './harnesses'
 import { cachedModels, refreshModels } from './models'
 import { descriptionOf, isModel, promptOf } from './prompt'
 import { notActivePrompt } from './run'
-import { sendMessage } from './steer'
+import { sendMessage, steer, typed } from './steer'
 import { adapterOf, remember, turnStep } from './turn'
 import type { World } from './world'
 
@@ -160,6 +160,22 @@ export const register: Register = (on, options) => {
     const own = e.agentId !== undefined && world.agents.has(e.agentId) && e.tool_use_id?.startsWith(CHILD_CALL)
     const modes = verdict.decision === 'ask' && !verdict.rule && !verdict.hook && !verdict.setting && !verdict.plugin
     return own && modes ? { decision: 'allow', reason: "via's own call for its harness's subagent" } : verdict
+  })
+
+  // Typed into a via agent's view while it runs: Claude Code delivers it at the agent's next step, as an
+  // attachment no model reads. A harness that takes steers reads it at its own next step instead.
+  // Only what the person typed (here, or from their phone): a notification, a peer's or a channel's
+  // message rides the same attachment and is not theirs to steer with.
+  on('session.append', async ($, e, next) => {
+    const inbox = e.agentId === undefined ? undefined : world.inboxes.get(e.agentId)
+    const theirs = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+    if (inbox !== undefined && theirs && e.message.type === 'attachment' && e.message.name === 'queued_command') {
+      const message = typed(e.message.content)
+      // A failed write loses the message: said, though the row is kept either way.
+      if (message)
+        await steer($, inbox, message).catch((err: unknown) => $.ui.log(`via could not pass your message to ${inbox.name}: ${String(err)}`))
+    }
+    return next(e)
   })
 
   on('agent.spawn', async ($, e, next) => {
