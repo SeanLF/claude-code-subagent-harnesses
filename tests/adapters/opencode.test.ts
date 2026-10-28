@@ -483,3 +483,64 @@ test('malformed tool content from an agent is skipped, not a crash', () => {
   )
   expect(done.at(-1)).toEqual({ k: 'called', id: 'm', output: 'ok', failed: false })
 })
+
+// A harness's own subagent, as ACP's subagents RFD reports it (shape captured from codex-acp
+// 2.3.1-preview.8, 2026-10-28): the parent's step calls the Agent tool, and the nested agent it starts
+// shows the child's row and answer from the parent's run.
+const CHILD = `${SID}:subagent:c1`
+const NESTED = [
+  { relay: 'session', sessionId: SID },
+  { relay: 'steered' },
+  { sessionId: SID, update: { sessionId: CHILD, title: 'List acp', sessionUpdate: 'subagent_update' } },
+  { sessionId: CHILD, update: { toolCallId: 'x', title: 'ls', kind: 'execute', status: 'in_progress', sessionUpdate: 'tool_call' } },
+  { sessionId: CHILD, update: { toolCallId: 'x', title: 'ls', kind: 'execute', status: 'completed', sessionUpdate: 'tool_call_update' } },
+  { sessionId: CHILD, update: { content: { type: 'text', text: 'steps.ts' }, messageId: 'm1', sessionUpdate: 'agent_message_chunk' } },
+  { sessionId: SID, update: { sessionId: CHILD, state: { state: 'idle', stopReason: 'end_turn' }, sessionUpdate: 'subagent_update' } },
+  chunk('m2', 'It found steps.ts.'),
+  { relay: 'prompt_done', stopReason: 'end_turn', usage: { outputTokens: 4 } },
+  { relay: 'done', stopReason: 'end_turn' },
+]
+const SPAWN = {
+  prompt: 'List acp',
+  description: 'List acp',
+  provider: { plugin: 'engine', tier: 'core' },
+  parentModel: 'x',
+  parentAgentId: 'a1',
+  fork: false,
+} as const
+
+test("a harness's subagent is an agent nested under the via agent, with the child's row and answer", async ($, on) => {
+  arrange(on, [], { stdout: lines(NESTED) })
+  on('agent.spawn', () => ({ model: 'x', agentId: 'n1' }))
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const first = await runTurn($)
+  expect(first.result.toolUses[0]?.name).toBe('Agent')
+  const call = first.chunks.find((c) => c.kind === 'tool')
+  const id = call?.kind === 'tool' ? call.id : ''
+  // The rest of the parent's turn: its own answer, never the child's.
+  const rest = await runTurn($, { ...STEP, index: 1 })
+  expect(rest.result.answer).toContain('It found steps.ts.')
+  expect(rest.result.answer).not.toContain('\nsteps.ts')
+  // In the foreground the parent's step would wait on a nested agent that waits on the parent's run.
+  expect(await $.agent.spawn({ ...SPAWN, tool_use_id: id, subagentType: 'via:opencode', background: false })).toEqual({
+    deny: "via shows a harness's subagent only as a background agent, and background tasks are off",
+  })
+})
+
+test('a background nested agent shows its harness subagent from the parent run', async ($, on) => {
+  arrange(on, [], { stdout: lines(NESTED) })
+  on('agent.spawn', () => ({ model: 'x', agentId: 'n1' }))
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const first = await runTurn($)
+  const call = first.chunks.find((c) => c.kind === 'tool')
+  const id = call?.kind === 'tool' ? call.id : ''
+  await runTurn($, { ...STEP, index: 1 })
+  expect(await $.agent.spawn({ ...SPAWN, tool_use_id: id, subagentType: 'via:opencode', background: true })).toEqual({
+    model: 'x',
+    agentId: 'n1',
+  })
+  await $.turn.start({ turnId: 't2', agentId: 'n1', text: 'List acp' })
+  const nested = await runTurn($, { ...STEP, turnId: 't2', agentId: 'n1' })
+  expect(nested.calls).toEqual([{ result: 'Done; no output reported.' }])
+  expect(nested.result.answer).toBe('steps.ts\n\n— answered by opencode subagent')
+})

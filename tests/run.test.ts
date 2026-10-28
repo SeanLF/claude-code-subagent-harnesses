@@ -712,3 +712,22 @@ test('a child-call id via never issued is an ordinary via spawn, whose step runs
   await run($, { ...STEP, agentId: 'n1' })
   expect(spawns).toHaveLength(1)
 })
+
+// via's own Agent call for a harness subagent: auto mode's classifier gives no verdict on a call no model
+// request made (seen live 2026-10-28), so via settles the mode's ask, and only that.
+test("via settles only the mode's ask on its own Agent call: a deny or a rule's ask still stands", async ($, on) => {
+  arrange(on, [], split(lines))
+  on('agent.spawn', () => ({ model: 'pi', agentId: 'a1' }))
+  let verdict: { decision: 'allow' | 'ask' | 'deny'; rule?: string } = { decision: 'ask' }
+  on('tool.check', () => verdict)
+  await spawnPi($, 'auto')
+  const check = (tool_use_id: string, agentId = 'a1') => $.tool.check({ tool: 'Agent', input: {}, tool_use_id, agentId })
+  expect((await check(`${CHILD_CALL}t1_1`)).decision).toBe('allow')
+  // Not via's own call, or not in a via agent's loop: the engine's verdict.
+  expect((await check('toolu_model_1')).decision).toBe('ask')
+  expect((await check(`${CHILD_CALL}t1_1`, 'x1')).decision).toBe('ask')
+  verdict = { decision: 'deny' }
+  expect((await check(`${CHILD_CALL}t1_1`)).decision).toBe('deny')
+  verdict = { decision: 'ask', rule: 'Agent(*)' }
+  expect((await check(`${CHILD_CALL}t1_1`)).decision).toBe('ask')
+})
