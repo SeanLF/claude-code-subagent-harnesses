@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.7.0...via-v0.8.0) (2026-10-28)
+
+
+### Features
+
+* a harness's own subagents show as agents nested under the via agent ([b612672](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/b61267254ade8c88b00cb845272efeb0c03eca3e))
+
+
+### Bug Fixes
+
+* a message typed into a running via agent's view reaches its harness ([118f9e2](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/118f9e261fe7f6977e4f94fed3502d47011f8d10))
+* via agents survive a session sent to the background, and a refused model gets a did-you-mean ([a83205c](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/a83205ce420810306541c2e20d6a35aa0d269bde))
+
 ## [0.7.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.6.0...via-v0.7.0) (2026-10-26)
 
 
