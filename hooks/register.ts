@@ -1,7 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { drawCall, drawGroup } from './acp/render'
-import { answerCall, endJob } from './acp/steps'
+import { answerCall, CHILD_CALL, endJob } from './acp/steps'
 import type { Adapter } from './adapter'
+import { woken } from './children'
 import { HARNESSES } from './harnesses'
 import { cachedModels, refreshModels } from './models'
 import { descriptionOf, isModel, promptOf } from './prompt'
@@ -117,6 +118,9 @@ export const register: Register = (on, options) => {
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
+    channels: new Map(),
+    nested: new Map(),
+    spawns: new Map(),
     tool: STEP,
     jobs: new Map(),
     calls: new Map(),
@@ -139,16 +143,47 @@ export const register: Register = (on, options) => {
         name: adapter.name,
         description: descriptionOf(adapter, models),
         prompt: notActivePrompt(adapter.name),
-        tools: [world.tool],
+        // Agent: a harness's own subagents show as agents nested under this one (hooks/acp/children.ts).
+        tools: [world.tool, 'Agent'],
         model: adapter.name,
       })
     }
     return started
   })
 
+  // A via agent's own Agent call, for its harness's subagent: approved here, since auto mode's classifier
+  // judges only calls a model's request made, and via makes this one up.
+  // Only the mode's own ask is settled here: a deny, or an ask from a rule, a setting, a hook or another
+  // plugin, still stands.
+  on('tool.check', { tool: 'Agent' }, async (_, e, next) => {
+    const verdict = await next(e)
+    const own = e.agentId !== undefined && world.agents.has(e.agentId) && e.tool_use_id?.startsWith(CHILD_CALL)
+    const modes = verdict.decision === 'ask' && !verdict.rule && !verdict.hook && !verdict.setting && !verdict.plugin
+    return own && modes ? { decision: 'allow', reason: "via's own call for its harness's subagent" } : verdict
+  })
+
   on('agent.spawn', async ($, e, next) => {
     const [plugin, name = ''] = (e.subagentType ?? '').split(':')
     const adapter = plugin === $.plugin.name ? world.adapters.get(name) : undefined
+    // A harness's subagent, which via shows from its parent's run: no harness of its own to choose.
+    const key = adapter && e.tool_use_id.startsWith(CHILD_CALL) ? world.spawns.get(e.tool_use_id) : undefined
+    if (adapter && key !== undefined) {
+      world.spawns.delete(e.tool_use_id)
+      // In the foreground the parent's step would wait on a nested agent that waits on the parent's run.
+      if (!e.background) {
+        const channel = world.channels.get(key)
+        if (channel) channel.read = true
+        return { deny: "via shows a harness's subagent only as a background agent, and background tasks are off" }
+      }
+      const model = world.channels.get(key)?.model
+      const started = await next({ ...e, model: model ?? adapter.name, ...(model ? { description: `${e.description} · ${model}` } : {}) })
+      if (started.agentId) {
+        world.agents.set(started.agentId, adapter)
+        world.nested.set(started.agentId, { key })
+        world.handbacks.set(started.agentId, e.permissionMode === 'auto')
+      }
+      return started
+    }
     // No request reaches Claude: the agent's model is the harness's, which Claude Code stamps on every
     // response via makes up. Claude Code takes gateway model ids. The task shows what was asked for.
     // A resume keeps what its agent started with; a workflow agent's description is the script's.
@@ -183,7 +218,12 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async (_, e, next) => {
     if (e.agentId !== undefined) {
-      const prompt = unwrapped(e.text) || world.seeds.get(e.agentId)
+      const rest = woken(e.text, world.nested)
+      if (rest === '') {
+        world.turns.set(e.turnId, { prompt: '', delivered: false, wake: true })
+        return next(e)
+      }
+      const prompt = unwrapped(rest ?? e.text) || world.seeds.get(e.agentId)
       world.seeds.delete(e.agentId)
       if (prompt) world.turns.set(e.turnId, { prompt, delivered: false })
     }

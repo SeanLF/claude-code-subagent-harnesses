@@ -1,6 +1,6 @@
 import type { TurnStepChunk, TurnStepResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { answerCall, pump } from '../hooks/acp/steps'
+import { answerCall, CHILD_CALL, pump } from '../hooks/acp/steps'
 import { pi } from '../hooks/adapters/pi'
 import { turnStep } from '../hooks/turn'
 import type { World } from '../hooks/world'
@@ -377,6 +377,9 @@ function fakeWorld(): World {
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
+    channels: new Map(),
+    nested: new Map(),
+    spawns: new Map(),
     tool: 'mcp__plugin_via_step__step',
     jobs: new Map(),
     calls: new Map(),
@@ -661,7 +664,12 @@ test('an Esc that finds the run parked between steps ends the run, so its harnes
   // Parked at its first yield, as after the step that issued the call.
   await gen.next()
   const job = { turnId: 't1', gen, held: [], outputs: new Map(), abort: new AbortController(), count: 0 }
-  const w = { tool: 'mcp__plugin_via_step__step', jobs: new Map([['a1', job]]), calls: new Map([['toolu_1', { agentId: 'a1', id: 'c1' }]]) }
+  const w = {
+    tool: 'mcp__plugin_via_step__step',
+    jobs: new Map([['a1', job]]),
+    calls: new Map([['toolu_1', { agentId: 'a1', id: 'c1' }]]),
+    spawns: new Map(),
+  }
   const esc = new AbortController()
   esc.abort()
   expect(await answerCall(w, 'toolu_1', esc.signal)).toEqual({ result: 'The harness run ended before this call finished.' })
@@ -672,4 +680,35 @@ test('an Esc that finds the run parked between steps ends the run, so its harnes
   let r = await next.next()
   while (!r.done) r = await next.next()
   expect(r.value.stopReason).toBe('end_turn')
+})
+
+test("a nested agent's end that wakes its via parent after the parent's run runs nothing and repeats the report", async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns, split(lines))
+  on('state.get', (_, e, next) => (e.key === 'reports' ? { value: { value: 'the report', version: 1 } } : next(e)))
+  const text = `<task-notification>\n<task-id>n1</task-id>\n<tool-use-id>${CHILD_CALL}t1_1</tool-use-id>\n<status>completed</status>\n</task-notification>`
+  await $.turn.start({ turnId: 't2', agentId: 'a1', text })
+  const { result } = await run($, { ...STEP, turnId: 't2' })
+  expect(spawns).toHaveLength(0)
+  expect(result.answer).toBe('the report')
+})
+
+test('a child-call id via never issued is an ordinary via spawn, whose step runs its harness', async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns, split(lines))
+  on('agent.spawn', () => ({ model: 'gpt-6-luna', agentId: 'n1' }))
+  await $.agent.spawn({
+    tool_use_id: `${CHILD_CALL}t1_1`,
+    subagentType: 'via:pi',
+    prompt: 'List acp',
+    description: 'List acp',
+    provider: { plugin: 'engine', tier: 'core' },
+    parentModel: 'pi',
+    parentAgentId: 'a1',
+    background: true,
+    fork: false,
+  })
+  await $.turn.start({ turnId: 't1', agentId: 'n1', text: 'List acp' })
+  await run($, { ...STEP, agentId: 'n1' })
+  expect(spawns).toHaveLength(1)
 })

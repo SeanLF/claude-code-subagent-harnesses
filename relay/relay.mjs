@@ -10,18 +10,23 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.0.2_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/schema/index.js
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.0.2_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/index.js
 var AGENT_METHODS = {
   initialize: "initialize",
   authenticate: "authenticate",
+  providers_list: "providers/list",
+  providers_set: "providers/set",
+  providers_disable: "providers/disable",
   session_new: "session/new",
   session_load: "session/load",
   session_set_mode: "session/set_mode",
   session_set_config_option: "session/set_config_option",
   session_prompt: "session/prompt",
   session_cancel: "session/cancel",
+  mcp_message: "mcp/message",
   session_list: "session/list",
   session_delete: "session/delete",
+  session_fork: "session/fork",
   session_resume: "session/resume",
   session_close: "session/close",
   logout: "logout"
@@ -36,6 +41,7 @@ var CLIENT_METHODS = {
   terminal_release: "terminal/release",
   terminal_wait_for_exit: "terminal/wait_for_exit",
   terminal_kill: "terminal/kill",
+  mcp_message: "mcp/message",
   elicitation_create: "elicitation/create",
   elicitation_complete: "elicitation/complete"
 };
@@ -1339,6 +1345,7 @@ var anyString = /^[\s\S]{0,}$/;
 var integer = /^-?\d+$/;
 var number = /^-?\d+(?:\.\d+)?$/;
 var boolean = /^(?:true|false)$/i;
+var _null = /^null$/i;
 var lowercase = /^[^A-Z]*$/;
 var uppercase = /^[^a-z]*$/;
 
@@ -2241,6 +2248,23 @@ var $ZodBoolean = /* @__PURE__ */ $constructor("$ZodBoolean", (inst, def) => {
       return payload;
     payload.issues.push({
       expected: "boolean",
+      code: "invalid_type",
+      input,
+      inst
+    });
+    return payload;
+  };
+});
+var $ZodNull = /* @__PURE__ */ $constructor("$ZodNull", (inst, def) => {
+  $ZodType.init(inst, def);
+  inst._zod.pattern = _null;
+  inst._zod.values = /* @__PURE__ */ new Set([null]);
+  inst._zod.parse = (payload, _ctx) => {
+    const input = payload.value;
+    if (input === null)
+      return payload;
+    payload.issues.push({
+      expected: "null",
       code: "invalid_type",
       input,
       inst
@@ -3218,6 +3242,9 @@ function handlePipeResult(left, next, ctx) {
   }
   return next._zod.run({ value: left.value, issues: left.issues }, ctx);
 }
+var $ZodPreprocess = /* @__PURE__ */ $constructor("$ZodPreprocess", (inst, def) => {
+  $ZodPipe.init(inst, def);
+});
 var $ZodReadonly = /* @__PURE__ */ $constructor("$ZodReadonly", (inst, def) => {
   $ZodType.init(inst, def);
   defineLazyInternal(inst, "propValues", (zod) => zod.def.innerType._zod.propValues);
@@ -4012,6 +4039,13 @@ function _int(Class2, params) {
 function _boolean(Class2, params) {
   return new Class2({
     type: "boolean",
+    ...normalizeParams(params)
+  });
+}
+// @__NO_SIDE_EFFECTS__
+function _null2(Class2, params) {
+  return new Class2({
+    type: "null",
     ...normalizeParams(params)
   });
 }
@@ -4938,6 +4972,15 @@ var numberProcessor = (schema, ctx, _json, params) => {
 var booleanProcessor = (_schema, _ctx, json, _params) => {
   json.type = "boolean";
 };
+var nullProcessor = (_schema, ctx, json, _params) => {
+  if (ctx.target === "openapi-3.0") {
+    json.type = "string";
+    json.nullable = true;
+    json.enum = [null];
+  } else {
+    json.type = "null";
+  }
+};
 var neverProcessor = (_schema, _ctx, json, _params) => {
   json.not = {};
 };
@@ -5863,6 +5906,14 @@ var ZodBoolean = /* @__PURE__ */ $constructor("ZodBoolean", (inst, def) => {
 function boolean2(params) {
   return _boolean(ZodBoolean, params);
 }
+var ZodNull = /* @__PURE__ */ $constructor("ZodNull", (inst, def) => {
+  $ZodNull.init(inst, def);
+  ZodType.init(inst, def);
+  inst._zod.processJSONSchema = (ctx, json, params) => nullProcessor(inst, ctx, json, params);
+});
+function _null3(params) {
+  return _null2(ZodNull, params);
+}
 var ZodUnknown = /* @__PURE__ */ $constructor("ZodUnknown", (inst, def) => {
   $ZodUnknown.init(inst, def);
   ZodType.init(inst, def);
@@ -5962,6 +6013,14 @@ function object(shape, params) {
     ...util_exports.normalizeParams(params)
   };
   return new ZodObject(def);
+}
+function looseObject(shape, params) {
+  return new ZodObject({
+    type: "object",
+    shape,
+    catchall: unknown(),
+    ...util_exports.normalizeParams(params)
+  });
 }
 var ZodUnion = /* @__PURE__ */ $constructor("ZodUnion", (inst, def) => {
   $ZodUnion.init(inst, def);
@@ -6228,6 +6287,10 @@ function pipe(in_, out2) {
     // ...util.normalizeParams(params),
   });
 }
+var ZodPreprocess = /* @__PURE__ */ $constructor("ZodPreprocess", (inst, def) => {
+  ZodPipe.init(inst, def);
+  $ZodPreprocess.init(inst, def);
+});
 var ZodReadonly = /* @__PURE__ */ $constructor("ZodReadonly", (inst, def) => {
   $ZodReadonly.init(inst, def);
   ZodType.init(inst, def);
@@ -6250,6 +6313,13 @@ function refine(fn, _params = {}) {
 }
 function superRefine(fn, params) {
   return _superRefine(fn, params);
+}
+function preprocess(fn, schema) {
+  return new ZodPreprocess({
+    type: "pipe",
+    in: transform(fn),
+    out: schema
+  });
 }
 
 // node_modules/.pnpm/@agentclientprotocol+sdk@2.0.2_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/schema-deserialize.js
@@ -6311,11 +6381,26 @@ function preserveCustomPayload(schema, key, knownTags) {
     return output;
   });
 }
+function defaultOnErrorOptionalStringTag(schema, key) {
+  return preprocess((value) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return value;
+    }
+    const record2 = value;
+    const tag = record2[key];
+    if (tag === void 0 || tag === null || typeof tag === "string") {
+      return value;
+    }
+    const normalized = { ...record2 };
+    delete normalized[key];
+    return normalized;
+  }, schema);
+}
 function vecSkipError(itemSchema) {
   return array(itemSchema.catch(skippedItem)).transform((items) => items.filter((item) => item !== skippedItem));
 }
 
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.0.2_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/schema/zod.gen.js
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.0.2_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/zod.gen.js
 var zRequestId = union([number2(), string2()]).nullable();
 var zSessionId = string2();
 var zWriteTextFileRequest = object({
@@ -6659,6 +6744,15 @@ var zCreateElicitationRequest = preserveCustomPayload(intersection(union([
   message: string2(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 })), "mode", ["form", "url"]);
+var zMcpServerAcpId = string2();
+var zMcpRequestId = string2();
+var zMessageMcpRequest = object({
+  serverId: zMcpServerAcpId,
+  requestId: zMcpRequestId,
+  method: string2(),
+  params: record(string2(), unknown()).nullish(),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
 var zExtRequest = unknown();
 var zAgentRequest = object({
   id: zRequestId,
@@ -6673,6 +6767,7 @@ var zAgentRequest = object({
     zWaitForTerminalExitRequest,
     zKillTerminalRequest,
     zCreateElicitationRequest,
+    zMessageMcpRequest,
     zExtRequest
   ]).nullish()
 });
@@ -6686,6 +6781,7 @@ var zPromptCapabilities = object({
 var zMcpCapabilities = object({
   http: defaultOnError(boolean2().optional().default(false), () => false),
   sse: defaultOnError(boolean2().optional().default(false), () => false),
+  acp: defaultOnError(boolean2().optional().default(false), () => false),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zSessionListCapabilities = object({
@@ -6695,6 +6791,20 @@ var zSessionDeleteCapabilities = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zSessionAdditionalDirectoriesCapabilities = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zSessionSystemPromptOverrideCapabilities = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zSessionSystemPromptModeCapabilities = object({
+  override: defaultOnError(zSessionSystemPromptOverrideCapabilities.nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zSessionSystemPromptCapabilities = object({
+  mode: defaultOnError(zSessionSystemPromptModeCapabilities.nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zSessionForkCapabilities = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zSessionResumeCapabilities = object({
@@ -6707,6 +6817,8 @@ var zSessionCapabilities = object({
   list: defaultOnError(zSessionListCapabilities.nullish(), () => void 0),
   delete: defaultOnError(zSessionDeleteCapabilities.nullish(), () => void 0),
   additionalDirectories: defaultOnError(zSessionAdditionalDirectoriesCapabilities.nullish(), () => void 0),
+  systemPrompt: defaultOnError(zSessionSystemPromptCapabilities.nullish(), () => void 0),
+  fork: defaultOnError(zSessionForkCapabilities.nullish(), () => void 0),
   resume: defaultOnError(zSessionResumeCapabilities.nullish(), () => void 0),
   close: defaultOnError(zSessionCloseCapabilities.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
@@ -6716,6 +6828,9 @@ var zLogoutCapabilities = object({
 });
 var zAgentAuthCapabilities = object({
   logout: defaultOnError(zLogoutCapabilities.nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zProvidersCapabilities = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zAgentCapabilities = object({
@@ -6729,9 +6844,18 @@ var zAgentCapabilities = object({
     audio: false,
     embeddedContext: false
   })),
-  mcpCapabilities: defaultOnError(zMcpCapabilities.optional().default({ http: false, sse: false }), () => ({ http: false, sse: false })),
+  mcpCapabilities: defaultOnError(zMcpCapabilities.optional().default({
+    http: false,
+    sse: false,
+    acp: false
+  }), () => ({
+    http: false,
+    sse: false,
+    acp: false
+  })),
   sessionCapabilities: defaultOnError(zSessionCapabilities.optional().default({}), () => ({})),
   auth: defaultOnError(zAgentAuthCapabilities.optional().default({}), () => ({})),
+  providers: defaultOnError(zProvidersCapabilities.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zAuthMethodId = string2();
@@ -6770,7 +6894,11 @@ var zInitializeResponse = object({
       audio: false,
       embeddedContext: false
     },
-    mcpCapabilities: { http: false, sse: false },
+    mcpCapabilities: {
+      http: false,
+      sse: false,
+      acp: false
+    },
     sessionCapabilities: {},
     auth: {}
   }), () => ({
@@ -6780,7 +6908,11 @@ var zInitializeResponse = object({
       audio: false,
       embeddedContext: false
     },
-    mcpCapabilities: { http: false, sse: false },
+    mcpCapabilities: {
+      http: false,
+      sse: false,
+      acp: false
+    },
     sessionCapabilities: {},
     auth: {}
   })),
@@ -6789,6 +6921,37 @@ var zInitializeResponse = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zAuthenticateResponse = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zProviderId = string2();
+var zLlmProtocol = union([
+  literal("anthropic"),
+  literal("openai"),
+  literal("azure"),
+  literal("vertex"),
+  literal("bedrock"),
+  string2()
+]);
+var zProviderCurrentConfig = object({
+  apiType: zLlmProtocol,
+  baseUrl: string2(),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zProviderInfo = object({
+  providerId: zProviderId,
+  supported: requiredDefaultOnError(vecSkipError(zLlmProtocol), () => []),
+  required: boolean2(),
+  current: zProviderCurrentConfig.nullish(),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zListProvidersResponse = object({
+  providers: array(zProviderInfo),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zSetProviderResponse = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zDisableProviderResponse = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zLogoutResponse = object({
@@ -6880,6 +7043,12 @@ var zListSessionsResponse = object({
 var zDeleteSessionResponse = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
+var zForkSessionResponse = object({
+  sessionId: zSessionId,
+  modes: defaultOnError(zSessionModeState.nullish(), () => void 0),
+  configOptions: defaultOnError(vecSkipError(zSessionConfigOption).nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
 var zResumeSessionResponse = object({
   modes: defaultOnError(zSessionModeState.nullish(), () => void 0),
   configOptions: defaultOnError(vecSkipError(zSessionConfigOption).nullish(), () => void 0),
@@ -6902,8 +7071,18 @@ var zStopReason = union([
   literal("refusal"),
   literal("cancelled")
 ]);
+var zUsage = object({
+  totalTokens: number2(),
+  inputTokens: number2(),
+  outputTokens: number2(),
+  thoughtTokens: defaultOnError(number2().nullish(), () => void 0),
+  cachedReadTokens: defaultOnError(number2().nullish(), () => void 0),
+  cachedWriteTokens: defaultOnError(number2().nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
 var zPromptResponse = object({
   stopReason: zStopReason,
+  usage: defaultOnError(zUsage.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zExtResponse = unknown();
@@ -6933,11 +7112,15 @@ var zAgentResponse = union([
     result: union([
       zInitializeResponse,
       zAuthenticateResponse,
+      zListProvidersResponse,
+      zSetProviderResponse,
+      zDisableProviderResponse,
       zLogoutResponse,
       zNewSessionResponse,
       zLoadSessionResponse,
       zListSessionsResponse,
       zDeleteSessionResponse,
+      zForkSessionResponse,
       zResumeSessionResponse,
       zCloseSessionResponse,
       zSetSessionModeResponse,
@@ -6987,6 +7170,41 @@ var zPlanEntry = object({
 });
 var zPlan = object({
   entries: requiredDefaultOnError(vecSkipError(zPlanEntry), () => []),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPlanId = string2();
+var zPlanItems = object({
+  planId: zPlanId,
+  entries: requiredDefaultOnError(vecSkipError(zPlanEntry), () => []),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPlanFile = object({
+  planId: zPlanId,
+  uri: string2(),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPlanMarkdown = object({
+  planId: zPlanId,
+  content: string2(),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPlanUpdateContent = union([
+  zPlanItems.and(object({
+    type: literal("items")
+  })),
+  zPlanFile.and(object({
+    type: literal("file")
+  })),
+  zPlanMarkdown.and(object({
+    type: literal("markdown")
+  }))
+]);
+var zPlanUpdate = object({
+  plan: zPlanUpdateContent,
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPlanRemoved = object({
+  planId: zPlanId,
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zUnstructuredCommandInput = object({
@@ -7060,6 +7278,108 @@ var zCompactionSummaryChunk = object({
   content: zContentBlock,
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
+var zSessionCancelCapabilities = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zSubagentSessionCapabilities = object({
+  cancel: defaultOnError(zSessionCancelCapabilities.nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zRunningStateUpdate = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zErrorStopReason = object({
+  error: defaultOnError(zError.nullish(), () => void 0)
+});
+var zIdleStateUpdate = defaultOnErrorOptionalStringTag(preserveCustomPayload(intersection(union([
+  object({
+    stopReason: literal("end_turn")
+  }),
+  object({
+    stopReason: literal("max_tokens")
+  }),
+  object({
+    stopReason: literal("max_turn_requests")
+  }),
+  object({
+    stopReason: literal("refusal")
+  }),
+  object({
+    stopReason: literal("cancelled")
+  }),
+  zErrorStopReason.and(object({
+    stopReason: literal("error")
+  })),
+  excludeKnownTags(object({
+    stopReason: string2()
+  }), "stopReason", [
+    "cancelled",
+    "end_turn",
+    "error",
+    "max_tokens",
+    "max_turn_requests",
+    "refusal"
+  ]),
+  object({
+    stopReason: _null3().optional()
+  })
+]), object({
+  usage: defaultOnError(zUsage.nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0),
+  stopReason: defaultOnError(string2().nullish(), () => void 0)
+})), "stopReason", [
+  "cancelled",
+  "end_turn",
+  "error",
+  "max_tokens",
+  "max_turn_requests",
+  "refusal"
+]), "stopReason");
+var zRequiresActionStateUpdate = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zUnknownStateUpdate = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zStateUpdate = preserveCustomPayload(union([
+  zRunningStateUpdate.and(object({
+    state: literal("running")
+  })),
+  zIdleStateUpdate.and(object({
+    state: literal("idle")
+  })),
+  zRequiresActionStateUpdate.and(object({
+    state: literal("requires_action")
+  })),
+  zUnknownStateUpdate.and(object({
+    state: literal("unknown")
+  })),
+  excludeKnownTags(object({
+    state: string2()
+  }), "state", ["idle", "requires_action", "running", "unknown"])
+]), "state", ["idle", "requires_action", "running", "unknown"]);
+var zSubagentUpdate = object({
+  sessionId: zSessionId,
+  title: defaultOnError(string2().nullish(), () => void 0),
+  description: defaultOnError(string2().nullish(), () => void 0),
+  capabilities: defaultOnError(zSubagentSessionCapabilities.nullish(), () => void 0),
+  state: defaultOnError(zStateUpdate.nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zSessionMessage = object({
+  messageId: zMessageId,
+  senderSessionId: defaultOnError(zSessionId.nullish(), () => void 0),
+  recipientSessionId: defaultOnError(zSessionId.nullish(), () => void 0),
+  content: defaultOnError(vecSkipError(zContentBlock).nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zSessionMessageChunk = object({
+  messageId: zMessageId,
+  senderSessionId: defaultOnError(zSessionId.nullish(), () => void 0),
+  recipientSessionId: defaultOnError(zSessionId.nullish(), () => void 0),
+  content: zContentBlock,
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
 var zSessionUpdate = union([
   zContentChunk.and(object({
     sessionUpdate: literal("user_message_chunk")
@@ -7078,6 +7398,12 @@ var zSessionUpdate = union([
   })),
   zPlan.and(object({
     sessionUpdate: literal("plan")
+  })),
+  zPlanUpdate.and(object({
+    sessionUpdate: literal("plan_update")
+  })),
+  zPlanRemoved.and(object({
+    sessionUpdate: literal("plan_removed")
   })),
   zAvailableCommandsUpdate.and(object({
     sessionUpdate: literal("available_commands_update")
@@ -7102,6 +7428,15 @@ var zSessionUpdate = union([
   })),
   zCompactionSummaryChunk.and(object({
     sessionUpdate: literal("compaction_summary_chunk")
+  })),
+  zSubagentUpdate.and(object({
+    sessionUpdate: literal("subagent_update")
+  })),
+  zSessionMessage.and(object({
+    sessionUpdate: literal("session_message")
+  })),
+  zSessionMessageChunk.and(object({
+    sessionUpdate: literal("session_message_chunk")
   }))
 ]);
 var zSessionNotification = object({
@@ -7142,6 +7477,12 @@ var zClientSessionCapabilities = object({
   notices: defaultOnError(zNoticeCapabilities.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
+var zSubagentCapabilities = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPlanCapabilities = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
 var zAuthCapabilities = object({
   terminal: defaultOnError(boolean2().optional().default(false), () => false),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
@@ -7161,6 +7502,8 @@ var zClientCapabilities = object({
   fs: defaultOnError(zFileSystemCapabilities.optional().default({ readTextFile: false, writeTextFile: false }), () => ({ readTextFile: false, writeTextFile: false })),
   terminal: defaultOnError(boolean2().optional().default(false), () => false),
   session: defaultOnError(zClientSessionCapabilities.nullish(), () => void 0),
+  subagents: defaultOnError(zSubagentCapabilities.nullish(), () => void 0),
+  plan: defaultOnError(zPlanCapabilities.nullish(), () => void 0),
   auth: defaultOnError(zAuthCapabilities.optional().default({ terminal: false }), () => ({ terminal: false })),
   elicitation: defaultOnError(zElicitationCapabilities.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
@@ -7183,6 +7526,20 @@ var zAuthenticateRequest = object({
   methodId: zAuthMethodId,
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
+var zListProvidersRequest = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zSetProviderRequest = object({
+  providerId: zProviderId,
+  apiType: zLlmProtocol,
+  baseUrl: string2(),
+  headers: record(string2(), string2()).optional(),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zDisableProviderRequest = object({
+  providerId: zProviderId,
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
 var zLogoutRequest = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
@@ -7203,6 +7560,11 @@ var zMcpServerSse = object({
   headers: array(zHttpHeader),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
+var zMcpServerAcp = object({
+  name: string2(),
+  serverId: zMcpServerAcpId,
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
 var zMcpServerStdio = object({
   name: string2(),
   command: string2(),
@@ -7217,12 +7579,26 @@ var zMcpServer = union([
   zMcpServerSse.and(object({
     type: literal("sse")
   })),
+  zMcpServerAcp.and(object({
+    type: literal("acp")
+  })),
   zMcpServerStdio
 ]);
+var zSystemPromptMode = union([
+  literal("append"),
+  literal("override"),
+  string2()
+]);
+var zSystemPrompt = object({
+  mode: zSystemPromptMode,
+  content: array(zContentBlock),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
 var zNewSessionRequest = object({
   cwd: string2(),
   additionalDirectories: array(string2()).optional(),
   mcpServers: array(zMcpServer),
+  systemPrompt: zSystemPrompt.nullish(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zLoadSessionRequest = object({
@@ -7230,6 +7606,7 @@ var zLoadSessionRequest = object({
   cwd: string2(),
   additionalDirectories: array(string2()).optional(),
   sessionId: zSessionId,
+  systemPrompt: zSystemPrompt.nullish(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zListSessionsRequest = object({
@@ -7241,11 +7618,20 @@ var zDeleteSessionRequest = object({
   sessionId: zSessionId,
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
+var zForkSessionRequest = object({
+  sessionId: zSessionId,
+  cwd: string2(),
+  additionalDirectories: array(string2()).optional(),
+  mcpServers: array(zMcpServer).optional(),
+  systemPrompt: zSystemPrompt.nullish(),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
 var zResumeSessionRequest = object({
   sessionId: zSessionId,
   cwd: string2(),
   additionalDirectories: array(string2()).optional(),
   mcpServers: array(zMcpServer).optional(),
+  systemPrompt: zSystemPrompt.nullish(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zCloseSessionRequest = object({
@@ -7281,11 +7667,15 @@ var zClientRequest = object({
   params: union([
     zInitializeRequest,
     zAuthenticateRequest,
+    zListProvidersRequest,
+    zSetProviderRequest,
+    zDisableProviderRequest,
     zLogoutRequest,
     zNewSessionRequest,
     zLoadSessionRequest,
     zListSessionsRequest,
     zDeleteSessionRequest,
+    zForkSessionRequest,
     zResumeSessionRequest,
     zCloseSessionRequest,
     zSetSessionModeRequest,
@@ -7373,6 +7763,25 @@ var zCreateElicitationResponse = preserveCustomPayload(intersection(union([
 ]), object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 })), "action", ["accept", "cancel", "decline"]);
+var zMcpError = looseObject({
+  code: int().min(-2147483648, {
+    error: "Invalid value: Expected int32 to be >= -2147483648"
+  }).max(2147483647, {
+    error: "Invalid value: Expected int32 to be <= 2147483647"
+  }),
+  message: string2(),
+  data: unknown().optional()
+});
+var zMessageMcpResponse = union([
+  object({
+    result: unknown(),
+    _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+  }),
+  object({
+    error: zMcpError,
+    _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+  })
+]);
 var zClientResponse = union([
   object({
     id: zRequestId,
@@ -7386,6 +7795,7 @@ var zClientResponse = union([
       zWaitForTerminalExitResponse,
       zKillTerminalResponse,
       zCreateElicitationResponse,
+      zMessageMcpResponse,
       zExtResponse
     ])
   }),
@@ -7398,9 +7808,16 @@ var zCancelNotification = object({
   sessionId: zSessionId,
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
+var zMessageMcpNotification = object({
+  serverId: zMcpServerAcpId,
+  requestId: zMcpRequestId,
+  method: string2(),
+  params: record(string2(), unknown()).nullish(),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
 var zClientNotification = object({
   method: string2(),
-  params: union([zCancelNotification, zExtNotification]).nullish()
+  params: union([zCancelNotification, zMessageMcpNotification, zExtNotification]).nullish()
 });
 var zCancelRequestNotification = object({
   requestId: zRequestId,
@@ -8603,7 +9020,7 @@ function ndJsonStream(output, input, options = {}) {
   return { readable, writable };
 }
 
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.0.2_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/schema/guards.gen.js
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.0.2_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/guards.gen.js
 var zGuardCreateElicitationRequestForm = zElicitationFormMode.and(object({ mode: literal("form") })).and(object({ message: string2() }));
 var zGuardCreateElicitationRequestUrl = zElicitationUrlMode.and(object({ mode: literal("url") })).and(object({ message: string2() }));
 var zGuardCreateElicitationRequestCustom = union([zElicitationSessionScope, zElicitationRequestScope]).and(object({ message: string2() }));
@@ -8613,6 +9030,27 @@ var zGuardElicitationPropertySchemaInteger = zIntegerPropertySchema.and(object({
 var zGuardElicitationPropertySchemaBoolean = zBooleanPropertySchema.and(object({ type: literal("boolean") }));
 var zGuardElicitationPropertySchemaArray = zMultiSelectPropertySchema.and(object({ type: literal("array") }));
 var zGuardMultiSelectItemsString = zStringMultiSelectItems.and(object({ type: literal("string") }));
+var zGuardStateUpdateRunning = zRunningStateUpdate.and(object({ state: literal("running") }));
+var zGuardStateUpdateIdle = zIdleStateUpdate.and(object({ usage: zUsage.nullish() })).and(object({ state: literal("idle") }));
+var zGuardStateUpdateRequiresAction = zRequiresActionStateUpdate.and(object({ state: literal("requires_action") }));
+var zGuardStateUpdateUnknown = zUnknownStateUpdate.and(object({ state: literal("unknown") }));
+var zGuardIdleStateUpdateEndTurn = object({
+  stopReason: literal("end_turn")
+});
+var zGuardIdleStateUpdateMaxTokens = object({
+  stopReason: literal("max_tokens")
+});
+var zGuardIdleStateUpdateMaxTurnRequests = object({
+  stopReason: literal("max_turn_requests")
+});
+var zGuardIdleStateUpdateRefusal = object({
+  stopReason: literal("refusal")
+});
+var zGuardIdleStateUpdateCancelled = object({
+  stopReason: literal("cancelled")
+});
+var zGuardIdleStateUpdateError = zErrorStopReason.and(object({ error: zError.nullish() })).and(object({ stopReason: literal("error") }));
+var zGuardIdleStateUpdateNone = object({ stopReason: _null3().optional() });
 var zGuardCreateElicitationResponseAccept = zElicitationAcceptAction.and(object({ action: literal("accept") }));
 var zGuardCreateElicitationResponseDecline = object({
   action: literal("decline")
@@ -8671,7 +9109,7 @@ function registerAppNotification(builder, spec, context, handler) {
   }
 }
 
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.0.2_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/stable/acp.js
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.0.2_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/acp.js
 function ndJsonStream2(output, input, options) {
   return ndJsonStream(output, input, options);
 }
@@ -8700,11 +9138,17 @@ var methods = {
     initialize: AGENT_METHODS.initialize,
     authenticate: AGENT_METHODS.authenticate,
     logout: AGENT_METHODS.logout,
+    providers: {
+      list: AGENT_METHODS.providers_list,
+      set: AGENT_METHODS.providers_set,
+      disable: AGENT_METHODS.providers_disable
+    },
     session: {
       new: AGENT_METHODS.session_new,
       load: AGENT_METHODS.session_load,
       list: AGENT_METHODS.session_list,
       delete: AGENT_METHODS.session_delete,
+      fork: AGENT_METHODS.session_fork,
       resume: AGENT_METHODS.session_resume,
       close: AGENT_METHODS.session_close,
       setMode: AGENT_METHODS.session_set_mode,
@@ -9180,6 +9624,7 @@ var agentRequestSpecs = {
   initialize: requestSpec(AGENT_METHODS.initialize, zInitializeRequest),
   newSession: requestSpec(AGENT_METHODS.session_new, zNewSessionRequest),
   loadSession: requestSpec(AGENT_METHODS.session_load, zLoadSessionRequest, emptyObjectResponse),
+  unstable_forkSession: requestSpec(AGENT_METHODS.session_fork, zForkSessionRequest),
   listSessions: requestSpec(AGENT_METHODS.session_list, zListSessionsRequest),
   deleteSession: requestSpec(AGENT_METHODS.session_delete, zDeleteSessionRequest, emptyObjectResponse),
   resumeSession: requestSpec(AGENT_METHODS.session_resume, zResumeSessionRequest),
@@ -9187,6 +9632,9 @@ var agentRequestSpecs = {
   setSessionMode: requestSpec(AGENT_METHODS.session_set_mode, zSetSessionModeRequest, emptyObjectResponse),
   setSessionConfigOption: requestSpec(AGENT_METHODS.session_set_config_option, zSetSessionConfigOptionRequest),
   authenticate: requestSpec(AGENT_METHODS.authenticate, zAuthenticateRequest, emptyObjectResponse),
+  unstable_listProviders: requestSpec(AGENT_METHODS.providers_list, zListProvidersRequest),
+  unstable_setProvider: requestSpec(AGENT_METHODS.providers_set, zSetProviderRequest, emptyObjectResponse),
+  unstable_disableProvider: requestSpec(AGENT_METHODS.providers_disable, zDisableProviderRequest, emptyObjectResponse),
   logout: requestSpec(AGENT_METHODS.logout, zLogoutRequest, emptyObjectResponse),
   prompt: requestSpec(AGENT_METHODS.session_prompt, zPromptRequest)
 };
@@ -9694,6 +10142,13 @@ var attached = (text) => {
   }
   return blocks;
 };
+var CAPABILITIES = {
+  fs: { readTextFile: false, writeTextFile: false },
+  terminal: false,
+  session: { compaction: {} },
+  subagents: {},
+  _meta: { terminal_output_delta: true }
+};
 var dash = process.argv.indexOf("--");
 var [bin, ...args] = dash < 0 ? [] : process.argv.slice(dash + 1);
 if (bin === void 0) fail("usage: relay.mjs -- <agent command...>");
@@ -9762,17 +10217,7 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
 }).connectWith(stream, async (ctx) => {
   const init = await ctx.request(methods.agent.initialize, {
     protocolVersion: PROTOCOL_VERSION,
-    // terminal_output_delta: command output in tool call updates, the Zed convention. No client
-    // terminal: commands stay in the agent's own sandbox. No plan capability: a to-do list comes as a
-    // plan update either way, and with it codex-acp sends a markdown plan as plan_update, which this
-    // client does not draw, in place of the message text it otherwise is. Compaction: codex-acp then
-    // reports the agent's compaction as compaction updates, not a tool call or a line in the answer.
-    clientCapabilities: {
-      fs: { readTextFile: false, writeTextFile: false },
-      terminal: false,
-      session: { compaction: {} },
-      _meta: { terminal_output_delta: true }
-    }
+    clientCapabilities: CAPABILITIES
   });
   const resume = process.env.RELAY_SESSION;
   const opened = resume ? await ctx.request(methods.agent.session.load, { sessionId: resume, cwd, mcpServers: [] }).catch((error2) => {

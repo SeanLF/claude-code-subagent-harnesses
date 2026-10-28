@@ -1,4 +1,4 @@
-import type { SessionUpdate, ToolCallContent } from '@agentclientprotocol/sdk'
+import type { SessionUpdate, ToolCallContent } from '@agentclientprotocol/sdk/unstable'
 import { isRecord } from './json'
 import type { Ask, Norm } from './norm'
 
@@ -86,13 +86,11 @@ function ask(e: Record<string, unknown>): Ask | undefined {
   }
 }
 
-// A parser per run. Updates before the first prompt are a resumed session's history, replayed by
-// session/load: never part of this answer.
-export function relayEvents(): (line: string) => Norm[] {
-  let live = false
+// One session's updates: the harness's own, or one of its subagents' (ACP's subagents RFD), each with its
+// own calls, messages and context.
+function sessionEvents(cwdOf: () => string) {
   let context = 0
   let speaking: unknown
-  let cwd = ''
   const shown = new Set<string>()
   const ended = new Set<string>()
   const titles = new Map<string, string>()
@@ -104,47 +102,8 @@ export function relayEvents(): (line: string) => Norm[] {
   const paths = new Map<string, string>()
   // What a call reported before it ended: codex-acp sends an edit's diff while it runs, not with its end.
   const reported = new Map<string, string>()
-  return (line) => {
-    let e: unknown
-    try {
-      e = JSON.parse(line)
-    } catch {
-      return []
-    }
-    if (!isRecord(e)) return []
-    switch (e.relay) {
-      case 'session':
-        if (typeof e.cwd === 'string' && e.cwd) cwd = e.cwd.replace(/\/+$/, '')
-        return typeof e.sessionId === 'string' ? [{ k: 'session', id: e.sessionId }] : []
-      case 'model':
-        return typeof e.name === 'string' ? [{ k: 'model', name: e.name }] : []
-      case 'steered':
-        live = true
-        speaking = undefined
-        return [{ k: 'steered' }]
-      case 'interrupted':
-        return [{ k: 'interrupted' }, { k: 'tool', t: '\n▸ interrupted\n' }]
-      case 'ask': {
-        const asked = ask(e)
-        return asked ? [{ k: 'ask', ask: asked }] : []
-      }
-      case 'error':
-        return [{ k: 'error', message: typeof e.message === 'string' ? e.message : 'the relay failed' }]
-      case 'prompt_done': {
-        // The prompt's own count of what it wrote, beside the context the last usage_update reported.
-        const usage = isRecord(e.usage) ? e.usage : {}
-        const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0
-        return [{ k: 'usage', usage: { input: context, cacheRead: 0, cacheWrite: 0, output } }]
-      }
-      case undefined:
-        break
-      default:
-        return []
-    }
-    // The agent's JSON, read through the SDK's types: a field the protocol renames fails the type check
-    // here. Its values are still checked, as anything a process prints is.
-    if (!live || !isRecord(e.update) || typeof e.update.sessionUpdate !== 'string') return []
-    const u = e.update as SessionUpdate
+  const read = (u: SessionUpdate): Norm[] => {
+    const cwd = cwdOf()
     switch (u.sessionUpdate) {
       case 'agent_message_chunk': {
         const content = u.content
@@ -255,6 +214,109 @@ export function relayEvents(): (line: string) => Norm[] {
       default:
         return []
     }
+  }
+  return {
+    read,
+    context: () => context,
+    // A steer starts a new prompt: its first message is a new one, even with the same id.
+    steered: () => {
+      speaking = undefined
+    },
+  }
+}
+
+// What a subagent's session says that its nested agent shows; its usage is its own context, not the run's.
+const SHOWN: ReadonlySet<string> = new Set(['message', 'text', 'call', 'called'])
+
+// A parser per run. Updates before the first prompt are a resumed session's history, replayed by
+// session/load: never part of this answer.
+export function relayEvents(): (line: string) => Norm[] {
+  let live = false
+  let cwd = ''
+  let root: string | undefined
+  const own = sessionEvents(() => cwd)
+  const children = new Map<string, ReturnType<typeof sessionEvents>>()
+  return (line) => {
+    let e: unknown
+    try {
+      e = JSON.parse(line)
+    } catch {
+      return []
+    }
+    if (!isRecord(e)) return []
+    switch (e.relay) {
+      case 'session':
+        if (typeof e.cwd === 'string' && e.cwd) cwd = e.cwd.replace(/\/+$/, '')
+        if (typeof e.sessionId === 'string') root = e.sessionId
+        return typeof e.sessionId === 'string' ? [{ k: 'session', id: e.sessionId }] : []
+      case 'model':
+        return typeof e.name === 'string' ? [{ k: 'model', name: e.name }] : []
+      case 'steered':
+        live = true
+        own.steered()
+        return [{ k: 'steered' }]
+      case 'interrupted':
+        return [{ k: 'interrupted' }, { k: 'tool', t: '\n▸ interrupted\n' }]
+      case 'ask': {
+        const asked = ask(e)
+        return asked ? [{ k: 'ask', ask: asked }] : []
+      }
+      case 'error':
+        return [{ k: 'error', message: typeof e.message === 'string' ? e.message : 'the relay failed' }]
+      case 'prompt_done': {
+        // The prompt's own count of what it wrote, beside the context the last usage_update reported.
+        const usage = isRecord(e.usage) ? e.usage : {}
+        const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0
+        return [{ k: 'usage', usage: { input: own.context(), cacheRead: 0, cacheWrite: 0, output } }]
+      }
+      case undefined:
+        break
+      default:
+        return []
+    }
+    // The agent's JSON, read through the SDK's types: a field the protocol renames fails the type check
+    // here. Its values are still checked, as anything a process prints is.
+    if (!live || !isRecord(e.update) || typeof e.update.sessionUpdate !== 'string') return []
+    const u = e.update as SessionUpdate
+    const session = typeof e.sessionId === 'string' ? e.sessionId : root
+    if (u.sessionUpdate === 'subagent_update') {
+      if (typeof u.sessionId !== 'string' || session === undefined) return []
+      const now = isRecord(u.state) ? u.state : undefined
+      const state = typeof now?.state === 'string' ? now.state : undefined
+      // A child's work that ended in a failure says so only here: v1 has no prompt response for it.
+      const idle = now?.state === 'idle' ? now : undefined
+      const failure =
+        idle?.stopReason === 'error'
+          ? isRecord(idle.error) && typeof idle.error.message === 'string'
+            ? idle.error.message
+            : 'error'
+          : undefined
+      return [
+        {
+          k: 'child',
+          id: u.sessionId,
+          parent: session,
+          ...(typeof u.title === 'string' ? { title: u.title } : {}),
+          ...(typeof u.description === 'string' ? { description: u.description } : {}),
+          ...(state ? { state } : {}),
+          ...(failure ? { failure } : {}),
+        },
+      ]
+    }
+    // Another session's update is a subagent's only once the run's own session is known.
+    if (root === undefined || session === undefined || session === root) return own.read(u)
+    // The model a subagent runs on, as its session's config reports it (one select of category model).
+    if (u.sessionUpdate === 'config_option_update') {
+      const option = (Array.isArray(u.configOptions) ? u.configOptions : []).find((o) => isRecord(o) && o.category === 'model')
+      const value = isRecord(option) && typeof option.currentValue === 'string' ? option.currentValue : undefined
+      return value ? [{ k: 'of', child: session, norm: { k: 'model', name: value } }] : []
+    }
+    let child = children.get(session)
+    if (child === undefined) {
+      child = sessionEvents(() => cwd)
+      children.set(session, child)
+    }
+    return child.read(u).flatMap((norm): Norm[] => (SHOWN.has(norm.k) ? [{ k: 'of', child: session, norm }] : []))
   }
 }
 

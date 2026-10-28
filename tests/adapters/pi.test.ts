@@ -77,7 +77,8 @@ test('the session registers an agent type only for a harness on PATH', async ($,
   await $.session.start({ cwd: '/', surface: null, isInteractive: false })
   expect(seen).toEqual(['pi'])
   // Its agent can call the tool of via's step server, which reports the harness's tool calls.
-  expect(tools).toEqual(['mcp__plugin_via_step__step'])
+  // Agent: the harness's own subagents show as agents nested under this one.
+  expect(tools).toEqual(['mcp__plugin_via_step__step', 'Agent'])
 })
 
 test('a read-only tool list ignores the project trust-gated .pi resources; a list with a writing tool keeps them', async ($, on) => {

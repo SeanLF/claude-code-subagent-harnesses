@@ -24,6 +24,18 @@ export type Norm =
   | { readonly k: 'notice'; readonly t: string } // said after the answer, as part of it
   | { readonly k: 'interrupted' } // the harness took an interrupt itself: nothing for the core to rerun
   | { readonly k: 'ask'; readonly ask: Ask } // a permission question for the person; the core writes the answer to the inbox
+  // A subagent the harness started (ACP's subagent_update), announced or updated: parent is the session that
+  // owns it, state its current work (idle: done for now), failure why its work ended, when it failed.
+  | {
+      readonly k: 'child'
+      readonly id: string
+      readonly parent: string
+      readonly title?: string
+      readonly description?: string
+      readonly state?: string
+      readonly failure?: string
+    }
+  | { readonly k: 'of'; readonly child: string; readonly norm: Norm } // what a subagent's own session said
 
 export type Ask = {
   readonly id: string

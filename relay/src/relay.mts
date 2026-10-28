@@ -18,7 +18,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { Readable, Writable } from 'node:stream'
-import * as acp from '@agentclientprotocol/sdk'
+import * as acp from '@agentclientprotocol/sdk/unstable'
 
 type Policy = 'allow' | 'deny' | 'ask'
 type Answer = (optionId: string | null) => void
@@ -104,6 +104,20 @@ const attached = (text: string): acp.ContentBlock[] => {
   return blocks
 }
 
+// terminal_output_delta: command output in tool call updates, the Zed convention. No client terminal:
+// commands stay in the agent's own sandbox. No plan capability: a to-do list comes as a plan update
+// either way, and with it codex-acp sends a markdown plan as plan_update, which this client does not
+// draw, in place of the message text it otherwise is. Compaction: codex-acp then reports the agent's
+// compaction as compaction updates, not a tool call or a line in the answer. Subagents: a harness's own
+// subagents come as child sessions (ACP's subagents RFD), not folded into the parent; the relay reads
+// the SDK's unstable schema, which has them, still at protocol version 1.
+const CAPABILITIES: acp.ClientCapabilities = {
+  fs: { readTextFile: false, writeTextFile: false },
+  terminal: false,
+  session: { compaction: {} },
+  subagents: {},
+  _meta: { terminal_output_delta: true },
+}
 const dash = process.argv.indexOf('--')
 const [bin, ...args] = dash < 0 ? [] : process.argv.slice(dash + 1)
 if (bin === undefined) fail('usage: relay.mjs -- <agent command...>')
@@ -189,17 +203,7 @@ const result = await acp
   .connectWith(stream, async (ctx) => {
     const init = await ctx.request(acp.methods.agent.initialize, {
       protocolVersion: acp.PROTOCOL_VERSION,
-      // terminal_output_delta: command output in tool call updates, the Zed convention. No client
-      // terminal: commands stay in the agent's own sandbox. No plan capability: a to-do list comes as a
-      // plan update either way, and with it codex-acp sends a markdown plan as plan_update, which this
-      // client does not draw, in place of the message text it otherwise is. Compaction: codex-acp then
-      // reports the agent's compaction as compaction updates, not a tool call or a line in the answer.
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        terminal: false,
-        session: { compaction: {} },
-        _meta: { terminal_output_delta: true },
-      },
+      clientCapabilities: CAPABILITIES,
     })
     const resume = process.env.RELAY_SESSION
     const opened = resume

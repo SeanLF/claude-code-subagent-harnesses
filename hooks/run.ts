@@ -2,6 +2,7 @@ import type { EngineInterface, Timer, TurnStepChunk, TurnUsage } from 'claude-co
 import type { Choice } from '../types'
 import type { Mark } from './acp/steps'
 import type { Adapter, Ask, Mode } from './adapter'
+import { closeChildren, route } from './children'
 import { stepOf } from './progress'
 import { nearestModels } from './prompt'
 import { finish, type Totals } from './report'
@@ -167,6 +168,14 @@ export async function* run(
           if (compacting.has(event.id) && !event.failed) compacted = true
           chunks.push({ kind: 'call-end', id: event.id, output: event.output, failed: event.failed })
           break
+        case 'child':
+        case 'of': {
+          // Only a spawn, a step of its own, ends the text block it falls in.
+          const marks = route(w, agentId, `${$.plugin.name}:${adapter.name}`, event)
+          if (marks.length > 0) kind = undefined
+          chunks.push(...marks)
+          break
+        }
         case 'tool': {
           chunks.push(push('text', event.t))
           const tools = (w.activity.get(agentId)?.tools ?? 0) + 1
@@ -269,6 +278,8 @@ export async function* run(
     if (!exited) void Promise.resolve(pieces.return?.(undefined as never)).catch(() => {})
     timer?.cancel()
     w.activity.delete(agentId)
+    // Its subagents ran in the harness: nothing more can come from them.
+    closeChildren(w, agentId, stopped === undefined ? undefined : 'the harness run was stopped')
     await row('')
     if (inbox) await closeInbox($, inbox, agentId, w.inboxes)
   }

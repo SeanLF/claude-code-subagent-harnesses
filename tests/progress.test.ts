@@ -117,6 +117,9 @@ test('an aborted run clears its agent-panel row', async () => {
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
+    channels: new Map(),
+    nested: new Map(),
+    spawns: new Map(),
     tool: 'mcp__plugin_via_step__step',
     jobs: new Map(),
     calls: new Map(),
@@ -310,6 +313,9 @@ test('a run ended from outside while parked between pieces stops its harness', a
     inboxes: new Map(),
     descriptions: new Map(),
     activity: new Map(),
+    channels: new Map(),
+    nested: new Map(),
+    spawns: new Map(),
   } as unknown as World
   const $ = {
     env: { get: async () => undefined },

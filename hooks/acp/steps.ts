@@ -12,6 +12,8 @@ import { NO_OUTPUT } from './render'
 export type Mark =
   | { kind: 'call-start'; id: string; input: { kind: string; title: string; path?: string }; usage: TurnUsage | null }
   | { kind: 'call-end'; id: string; output: string; failed: boolean }
+  // A harness's subagent to show as an agent nested under this one: the step calls the Agent tool.
+  | { kind: 'spawn'; child: string; type: string; title: string; description?: string }
 // A harness run that outlives its step: steps and the tool's tool.call hook take turns reading it.
 // held: what a tool.call hook read past its call, for the next step; outputs: finished calls by the
 // harness's id; final: the run's last step, once it ended.
@@ -28,9 +30,14 @@ export type Job = {
 // The plugin's tool, by its registered name, and the runs and calls in flight.
 export type Steps = {
   tool: string
+  spawns: Map<string, string> // by an Agent tool_use id a step made: the harness subagent it shows
   jobs: Map<string, Job> // by agent id
   calls: Map<string, { agentId: string; id: string }> // by tool_use_id: the harness's own call id
 }
+
+// The Agent calls a step makes for a harness's subagents: approved without the mode's classifier, which
+// judges only a model's own calls, and their nested agents run as via's.
+export const CHILD_CALL = 'toolu_via_child_'
 
 // What a run ended early answers its next step: an aborted run's end of turn, as drive's own.
 function ended(turnId: string): TurnStepResult {
@@ -88,6 +95,17 @@ export async function* pump(
       if (c.kind === 'call-end') {
         job.outputs.set(c.id, { output: c.output, failed: c.failed })
         continue
+      }
+      if (c.kind === 'spawn') {
+        job.count += 1
+        const id = `${CHILD_CALL}${e.turnId.replace(/[^A-Za-z0-9_]/g, '_')}_${job.count}`
+        w.spawns.set(id, c.child)
+        const input = { description: c.title, prompt: c.description || c.title, subagent_type: c.type, run_in_background: true }
+        const index = block(-1 - job.count)
+        yield { kind: 'tool', index, id, name: 'Agent' }
+        yield { kind: 'input', index, json: JSON.stringify(input) }
+        yield { kind: 'stop', stopReason: 'tool_use', usage: null }
+        return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'Agent', input }], stopReason: 'tool_use', usage: null }
       }
       if (c.kind === 'call-start') {
         job.count += 1

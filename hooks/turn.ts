@@ -2,6 +2,7 @@ import type { EngineInterface, StreamHook, TurnStepChunk, TurnStepResult } from 
 import type { Choice } from '../types'
 import { endJob, type Job, type Mark, pump } from './acp/steps'
 import type { Adapter, Mode } from './adapter'
+import { childRun } from './children'
 import { deliver, handbackAsked, respond, textChunks } from './handback'
 import { cachedModels } from './models'
 import { helpOf, isModel, promptOf } from './prompt'
@@ -183,6 +184,34 @@ async function readOnlyGuard($: Parameters<StepHook>[0], adapter: Adapter): Prom
   return (listed?.exitCode === 0 ? guard.env(listed.stdout) : undefined) ?? guard.why
 }
 
+// A nested agent's steps: its harness subagent's rows and answer, read from its parent's run.
+async function* nestedStep(
+  w: World,
+  $: Parameters<StepHook>[0],
+  e: Parameters<StepHook>[1],
+  agentId: string,
+  adapter: Adapter,
+  nested: { key: string; report?: string },
+  signal: AbortSignal,
+): AsyncGenerator<TurnStepChunk, TurnStepResult> {
+  const job = w.jobs.get(agentId)
+  if (job !== undefined) return yield* pump(w, job, e, signal)
+  // After its handback, or a later message: the answer again, as text.
+  if (nested.report !== undefined) return yield* respond(e, textChunks(nested.report), nested.report)
+  const abort = new AbortController()
+  const handback = await handbackOf(w, $, agentId)
+  const started: Job = {
+    turnId: e.turnId,
+    gen: childRun(w, agentId, adapter.name, e, abort.signal, handback),
+    held: [],
+    outputs: new Map(),
+    abort,
+    count: 0,
+  }
+  w.jobs.set(agentId, started)
+  return yield* pump(w, started, e, signal)
+}
+
 // A run outlives the step that started it: each harness tool call ends a step with a call to via's
 // tool, whose tool.call hook reads the run on until the harness finishes that call (answerCall), and
 // the next step reads on from there. Whichever hook reads the run lends it its abort signal.
@@ -191,6 +220,12 @@ export async function* turnStep(w: World, $: Parameters<StepHook>[0], e: Paramet
   if (agentId === undefined) return yield* next(e)
   const adapter = await adapterOf(w, $, agentId)
   if (adapter === undefined) return yield* next(e)
+  const nested = w.nested.get(agentId)
+  if (nested !== undefined) return yield* nestedStep(w, $, e, agentId, adapter, nested, next.signal)
+  if (w.turns.get(e.turnId)?.wake) {
+    const saved = (await $.state.get({ plugin: 'via', key: 'reports', id: agentId })).value ?? ''
+    return yield* respond(e, textChunks(saved), saved)
+  }
   const job = w.jobs.get(agentId)
   if (job !== undefined) {
     if (job.turnId === e.turnId) return yield* pump(w, job, e, next.signal)
