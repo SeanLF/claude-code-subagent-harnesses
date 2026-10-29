@@ -2,7 +2,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import { drawCall, drawGroup } from './acp/render'
 import { answerCall, CHILD_CALL, endJob } from './acp/steps'
 import type { Adapter } from './adapter'
-import { woken } from './children'
+import { waitChild, woken } from './children'
+import { respond, textChunks } from './handback'
 import { HARNESSES } from './harnesses'
 import { cachedModels, refreshModels } from './models'
 import { descriptionOf, isModel, promptOf } from './prompt'
@@ -125,6 +126,13 @@ export const register: Register = (on, options) => {
     jobs: new Map(),
     calls: new Map(),
   }
+  on('engine.create', async (_, e, next) => {
+    const built = await next(e)
+    return {
+      ...built,
+      viaChildren: { wait: ({ key }: { key: string }) => waitChild(world, key, (wake) => built.clock.after(5_000, wake)) },
+    }
+  })
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     // Best effort: a hook that throws is skipped whole, and the agents below must still register.
@@ -291,5 +299,14 @@ export const register: Register = (on, options) => {
 
   on('turn.step', async function* ($, e, next) {
     return yield* turnStep(world, $, e, next)
+  }).catch(async function* (_, e, next) {
+    const adapter = e.agentId === undefined ? undefined : world.agents.get(e.agentId)
+    if (!adapter) return yield* next(e)
+    // A skipped hook would send this harness's model id to Anthropic. End the via turn instead.
+    endJob(world, e.agentId as string)
+    const report = `The ${adapter.name}${world.nested.has(e.agentId as string) ? ' subagent' : ''} failed: via could not render its next step.`
+    const nested = world.nested.get(e.agentId as string)
+    if (nested) nested.report = report
+    return yield* respond(e, textChunks(report), report)
   })
 }
