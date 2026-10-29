@@ -127,6 +127,8 @@ export function closeChildren(w: Children, agentId: string, failure?: string): v
 
 // A nested agent's run: its child's rows and messages, then its last message as the answer, signed with
 // the model the child's session reported.
+const PLAN_MARKS: Record<string, string> = { pending: '☐', in_progress: '◐', completed: '☑' }
+
 export async function* childRun(
   w: Children,
   agentId: string,
@@ -138,15 +140,17 @@ export async function* childRun(
   const nested = w.nested.get(agentId)
   const channel = nested === undefined ? undefined : w.channels.get(nested.key)
   let index = -1
-  let kind: 'text' | undefined
+  let kind: 'text' | 'thinking' | undefined
   let report = ''
+  let plan = ''
+  let plans = 0
   let failure: string | undefined
-  const text = (t: string): TurnStepChunk => {
-    if (kind !== 'text') {
-      kind = 'text'
+  const push = (k: 'text' | 'thinking', text: string): TurnStepChunk => {
+    if (kind !== k) {
+      kind = k
       index += 1
     }
-    return { kind: 'text', index, text: t }
+    return { kind: k, index, text }
   }
   for (;;) {
     const item = channel?.queue.shift() ?? (channel === undefined ? ({ k: 'end' } as const) : undefined)
@@ -178,10 +182,23 @@ export async function* childRun(
           title: grand.title,
           ...(grand.description ? { description: grand.description } : {}),
         }
-    } else if (item.k === 'message') report = ''
-    else if (item.k === 'text') {
+    } else if (item.k === 'message') {
+      report = ''
+      kind = undefined
+    } else if (item.k === 'text') {
       report += item.t
-      yield text(item.t)
+      yield push('text', item.t)
+    } else if (item.k === 'thinking') yield push('thinking', item.t)
+    else if (item.k === 'plan') {
+      // The same changed-plan row the top-level run shows, separate from the child's answer.
+      const listed = item.entries.map((entry) => `${PLAN_MARKS[entry.status] ?? '☐'} ${entry.content}`).join('\n')
+      if (listed === plan) continue
+      plan = listed
+      kind = undefined
+      plans += 1
+      const id = `plan-${plans}`
+      yield { kind: 'call-start', id, input: { kind: 'plan', title: 'Plan' }, usage: null }
+      yield { kind: 'call-end', id, output: listed, failed: false }
     } else if (item.k === 'call') {
       kind = undefined
       yield {
@@ -195,7 +212,7 @@ export async function* childRun(
   const said = report.trim() || (failure ? `The ${name} subagent failed: ${failure}` : `The ${name} subagent ended without a message.`)
   const signed = `${said}\n\n— answered by ${name} subagent${channel?.model ? `, ${channel.model}` : ''}`
   if (nested) nested.report = signed
-  yield text(`\n\n— answered by ${name} subagent${channel?.model ? `, ${channel.model}` : ''}`)
+  yield push('text', `\n\n— answered by ${name} subagent${channel?.model ? `, ${channel.model}` : ''}`)
   if (handback) return yield* deliver(name, e, { prompt: '', report: signed, delivered: false }, index + 1, signed, null)
   return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], signed)
 }
