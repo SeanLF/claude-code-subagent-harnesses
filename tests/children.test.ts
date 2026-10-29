@@ -4,7 +4,7 @@ import { relayEvents } from '../hooks/acp/events'
 import type { Norm } from '../hooks/acp/norm'
 import { CHILD_CALL, type Job, type Mark, pump } from '../hooks/acp/steps'
 import { type Children, childRun, closeChildren, route, waitChild, woken } from '../hooks/children'
-import { NODE, run, STEP } from './helpers'
+import { NODE, run, STEP, storage } from './helpers'
 
 // This regression needs real elapsed time: the engine's hook budget uses the real clock.
 declare function setTimeout(fn: () => void, ms: number): unknown
@@ -207,13 +207,17 @@ async function nestedChild(
 ) {
   if (realTime) on('clock.after', { ms: 5_000 }, () => new Promise((resolve) => setTimeout(() => resolve({ value: undefined }), 5_000)))
   const clock = mock.clock(on)
+  const files = storage(on)
   mock.env(on, { HOME: '/home/u' })
   on('agent.list', () => ({ value: [{ id: 'a1', description: 'parent', type: 'via:codex', status: 'running' }] }))
   on('session.messages', () => ({ value: [] }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('agent.spawn', (_, e) => ({ agentId: 'n1', model: e.model ?? 'codex' }))
   on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }))
-  on('fs.write', () => ({ value: undefined }))
+  on('fs.write', (_, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
   on('process.run', () => ({ value: NODE }))
   const line = (events: unknown[]) => `${events.map((e) => JSON.stringify(e)).join('\n')}\n`
   on('process.spawn', async function* () {
