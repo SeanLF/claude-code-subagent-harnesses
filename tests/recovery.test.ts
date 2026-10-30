@@ -448,3 +448,27 @@ test('detaching a durable follower preserves the producer inbox and its monotoni
   expect(files.get(inbox.path)).toBe(`${inbox.lines[0]}\n`)
   expect(cancelled).toBe(false)
 })
+
+test('a roster write that fails once does not cancel the writes after it', async ($, on) => {
+  const { keepSpawn, remember } = await import('../hooks/recovery')
+  let fail = true
+  const store = new Map<string, unknown>()
+  on('store.get', (_, e) => {
+    if (fail) throw new Error('synthetic store hiccup')
+    return { value: store.get(e.key) }
+  })
+  on('store.set', (_, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  const world = {} as World
+  const first = await remember(world, $, 'a1', { harness: 'pi', handback: false }).then(
+    () => 'written',
+    (error: unknown) => String(error),
+  )
+  expect(first).toContain('retained run mappings')
+  fail = false
+  await remember(world, $, 'a2', { harness: 'pi', handback: false })
+  await keepSpawn(world, $, 'toolu_via_child_t_1', 'a2/t-0/child#1')
+  expect(Object.keys(store.get('agents') as object)).toEqual(['a2'])
+})
