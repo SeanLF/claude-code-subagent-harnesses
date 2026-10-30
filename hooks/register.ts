@@ -2,7 +2,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import { drawCall, drawGroup } from './acp/render'
 import { answerCall, CHILD_CALL, endJob } from './acp/steps'
 import type { Adapter } from './adapter'
-import { woken } from './children'
+import { waitChild, woken } from './children'
+import { respond, textChunks } from './handback'
 import { HARNESSES } from './harnesses'
 import { cachedModels, refreshModels } from './models'
 import { descriptionOf, isModel, promptOf } from './prompt'
@@ -125,6 +126,13 @@ export const register: Register = (on, options) => {
     jobs: new Map(),
     calls: new Map(),
   }
+  on('engine.create', async (_, e, next) => {
+    const built = await next(e)
+    return {
+      ...built,
+      viaChildren: { wait: ({ key }: { key: string }) => waitChild(world, key, (wake) => built.clock.after(5_000, wake)) },
+    }
+  })
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     // Best effort: a hook that throws is skipped whole, and the agents below must still register.
@@ -275,9 +283,12 @@ export const register: Register = (on, options) => {
     on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => sendMessage(world, $, e, next))
 
   // The matcher's type names only built-in tools; an MCP tool's full name is accepted at run time.
-  on('tool.call', { tool: STEP as 'Bash' }, (_, e, next) => answerCall(world, e.tool_use_id, next.signal)).catch(() => ({
-    deny: 'via could not report this harness tool call.',
-  }))
+  on('tool.call', { tool: STEP as 'Bash' }, (_, e, next) => answerCall(world, e.tool_use_id, next.signal)).catch(async ($, _, next) => {
+    // The row shows only the denial: keep why in the local log, as a failed step does.
+    const { kind, message } = next.error
+    await Promise.allSettled([$.ui.log(`via tool.call failed: ${JSON.stringify({ kind, message })}`)])
+    return { deny: 'via could not report this harness tool call.' }
+  })
 
   on('ui.render', { component: 'ToolUse' }, (_, e, next) => (e.props.tool === world.tool ? drawCall(e.props) : next(e)))
   // Claude Code decides which calls fold; via only counts them, and only a run of its own calls alone.
@@ -289,7 +300,40 @@ export const register: Register = (on, options) => {
   // The row shows the output already, all of it when expanded.
   on('ui.render', { component: 'ToolResult' }, (_, e, next) => (e.props.tool === world.tool ? { type: 'Box', children: [] } : next(e)))
 
+  // The engine's catch metadata keeps a message but drops the thrown Error's stack.
+  // Keep it only for this invocation, without retaining turns or private task content.
+  const stepErrors = new WeakMap<object, unknown>()
   on('turn.step', async function* ($, e, next) {
-    return yield* turnStep(world, $, e, next)
+    try {
+      return yield* turnStep(world, $, e, next)
+    } catch (error) {
+      stepErrors.set(e, error)
+      throw error
+    }
+  }).catch(async function* ($, e, next) {
+    const adapter = e.agentId === undefined ? undefined : world.agents.get(e.agentId)
+    if (!adapter) return yield* next(e)
+    const original = stepErrors.get(e)
+    stepErrors.delete(e)
+    const message = original instanceof Error ? original.message : (next.error.message ?? `turn.step ${next.error.kind}`)
+    const diagnostic = {
+      ...next.error,
+      message,
+      stack: original instanceof Error ? original.stack : new Error(message).stack,
+      stackOrigin: original instanceof Error ? 'throw' : 'catch',
+      turnId: e.turnId,
+      index: e.index,
+    }
+    // Either sink may be unavailable; diagnostics must not prevent the safe handback.
+    await Promise.allSettled([
+      $.ui.log(`via turn.step failed: ${JSON.stringify(diagnostic)}`),
+      $.state.set({ plugin: 'via', key: 'stepErrors', id: e.agentId as string }, diagnostic),
+    ])
+    // A skipped hook would send this harness's model id to Anthropic. End the via turn instead.
+    endJob(world, e.agentId as string)
+    const report = `The ${adapter.name}${world.nested.has(e.agentId as string) ? ' subagent' : ''} failed: via could not render its next step.`
+    const nested = world.nested.get(e.agentId as string)
+    if (nested) nested.report = report
+    return yield* respond(e, textChunks(report), report)
   })
 }
