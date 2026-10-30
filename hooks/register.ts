@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { drawCall, drawGroup } from './acp/render'
-import { answerCall, CHILD_CALL, endJob } from './acp/steps'
+import { answerCall, CHILD_CALL, endJob, waitStep } from './acp/steps'
 import type { Adapter } from './adapter'
 import { woken } from './children'
 import { HARNESSES } from './harnesses'
@@ -125,6 +125,13 @@ export const register: Register = (on, options) => {
     jobs: new Map(),
     calls: new Map(),
   }
+  on('engine.create', async (_, e, next) => {
+    const built = await next(e)
+    return {
+      ...built,
+      viaSteps: { wait: ({ agentId }: { agentId: string }) => waitStep(world, agentId, (wake) => built.clock.after(5_000, wake)) },
+    }
+  })
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     // Best effort: a hook that throws is skipped whole, and the agents below must still register.
@@ -275,7 +282,15 @@ export const register: Register = (on, options) => {
     on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => sendMessage(world, $, e, next))
 
   // The matcher's type names only built-in tools; an MCP tool's full name is accepted at run time.
-  on('tool.call', { tool: STEP as 'Bash' }, (_, e, next) => answerCall(world, e.tool_use_id, next.signal)).catch(() => ({
+  on('tool.call', { tool: STEP as 'Bash' }, ($, e, next) =>
+    answerCall(
+      world,
+      e.tool_use_id,
+      next.signal,
+      (wake) => $.clock.after(30_000, wake),
+      (agentId) => $.viaSteps.wait({ agentId }),
+    ),
+  ).catch(() => ({
     deny: 'via could not report this harness tool call.',
   }))
 

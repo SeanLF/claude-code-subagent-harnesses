@@ -1,5 +1,5 @@
-import type { TurnStepChunk, TurnStepResult, TurnUsage } from 'claude-code'
-import { NO_OUTPUT } from './render'
+import type { Timer, TurnStepChunk, TurnStepResult, TurnUsage } from 'claude-code'
+import { NO_OUTPUT, STILL_RUNNING } from './render'
 
 // One step per harness tool call. A run outlives the step that started it: each tool call the
 // harness reports ends a step with a call to the plugin's own tool, whose tool.call hook (answerCall)
@@ -25,6 +25,8 @@ export type Job = {
   final?: TurnStepResult
   abort: AbortController
   count: number
+  // A progress continuation reuses the outstanding read, never another generator.next().
+  reading?: Promise<IteratorResult<TurnStepChunk | Mark, TurnStepResult>>
 }
 
 // The plugin's tool, by its registered name, and the runs and calls in flight.
@@ -32,7 +34,37 @@ export type Steps = {
   tool: string
   spawns: Map<string, string> // by an Agent tool_use id a step made: the harness subagent it shows
   jobs: Map<string, Job> // by agent id
-  calls: Map<string, { agentId: string; id: string }> // by tool_use_id: the harness's own call id
+  calls: Map<string, { agentId: string; id: string; input?: Extract<Mark, { kind: 'call-start' }>['input'] }> // by tool_use_id
+}
+
+function read(job: Job): Promise<IteratorResult<TurnStepChunk | Mark, TurnStepResult>> {
+  job.reading ??= job.gen.next()
+  return job.reading
+}
+
+async function take(job: Job): Promise<IteratorResult<TurnStepChunk | Mark, TurnStepResult>> {
+  const result = await read(job)
+  job.reading = undefined
+  return result
+}
+
+// A continuation can inherit a read started by an earlier hook. Join it through an
+// engine noun so this hook's own-time budget excludes the wait. Each noun reply stays
+// below the engine's ten-second deadline, even when the command takes many minutes.
+export async function waitStep(w: Steps, agentId: string, after: (wake: () => void) => Timer): Promise<void> {
+  const job = w.jobs.get(agentId)
+  if (!job || job.final !== undefined || job.abort.signal.aborted) return
+  let timer: Timer | undefined
+  try {
+    await Promise.race([
+      read(job),
+      new Promise<void>((resolve) => {
+        timer = after(resolve)
+      }),
+    ])
+  } finally {
+    timer?.cancel()
+  }
 }
 
 // The Agent calls a step makes for a harness's subagents: approved without the mode's classifier, which
@@ -84,7 +116,7 @@ export async function* pump(
         w.jobs.delete(e.agentId ?? '')
         return { ...job.final, turnId: e.turnId, index: e.index }
       } else {
-        const r = await job.gen.next()
+        const r = await take(job)
         if (r.done) {
           // A generator ended from outside returns nothing: without a final, this loop would spin.
           job.final = r.value ?? ended(e.turnId)
@@ -110,7 +142,7 @@ export async function* pump(
       if (c.kind === 'call-start') {
         job.count += 1
         const id = `toolu_step_${e.turnId.replace(/[^A-Za-z0-9_]/g, '_')}_${job.count}`
-        w.calls.set(id, { agentId: e.agentId ?? '', id: c.id })
+        w.calls.set(id, { agentId: e.agentId ?? '', id: c.id, input: c.input })
         const index = block(-1 - job.count)
         yield { kind: 'tool', index, id, name: w.tool }
         yield { kind: 'input', index, json: JSON.stringify(c.input) }
@@ -137,12 +169,18 @@ export async function answerCall(
   w: Steps,
   toolUseId: string | undefined,
   signal: AbortSignal,
+  after?: (wake: () => void) => Timer,
+  wait?: (agentId: string) => Promise<void>,
 ): Promise<{ result: string; isError?: true } | { deny: string }> {
   const ref = toolUseId === undefined ? undefined : w.calls.get(toolUseId)
   const job = ref === undefined ? undefined : w.jobs.get(ref.agentId)
   if (ref === undefined || job === undefined)
     return { deny: 'This tool only reports a tool call an agent harness made; it does nothing when called.' }
   const unlend = lend(job, signal)
+  let timer: Timer | undefined
+  const progress = new Promise<undefined>((resolve) => {
+    timer = after?.(() => resolve(undefined))
+  })
   try {
     for (;;) {
       const done = job.outputs.get(ref.id)
@@ -158,7 +196,20 @@ export async function answerCall(
         void job.gen.return(undefined as never).catch(() => {})
         return { result: 'The harness run ended before this call finished.' }
       }
-      const r = await job.gen.next()
+      const r = await Promise.race([read(job), progress, ...(wait ? [wait(ref.agentId).then(() => 'wake' as const)] : [])])
+      if (r === 'wake') continue
+      if (r === undefined) {
+        // Only the display advances. The command and its pending read continue under the same id.
+        job.held.push({
+          kind: 'call-start',
+          id: ref.id,
+          input: ref.input?.kind === 'wait' ? ref.input : { kind: 'wait', title: `Waiting for ${ref.input?.title ?? 'harness tool'}` },
+          usage: null,
+        })
+        w.calls.delete(toolUseId as string)
+        return { result: `${STILL_RUNNING}.` }
+      }
+      job.reading = undefined
       if (r.done) {
         job.final = r.value
         continue
@@ -167,6 +218,7 @@ export async function answerCall(
       else job.held.push(r.value)
     }
   } finally {
+    timer?.cancel()
     unlend()
   }
 }

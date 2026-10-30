@@ -60,6 +60,21 @@ export function expectPiSpawn(spawn: Spawn | undefined, root: string, extra: str
 
 export const ENV = { TMPDIR: '/tmp', HOME: '/home/u' }
 
+export function storage(on: TestOn, options: { get?: (key: string) => unknown; read?: boolean } = {}) {
+  const store = new Map<string, unknown>()
+  const files = new Map<string, string>()
+  on('store.get', (_, e, next) => {
+    const value = options.get ? options.get(e.key) : store.get(e.key)
+    return value !== undefined || e.key === 'agents' ? { value } : next(e)
+  })
+  on('store.set', (_, e) => {
+    store.set(e.key, JSON.parse(JSON.stringify(e.value)))
+    return { value: undefined }
+  })
+  if (options.read !== false) on('fs.read', (_, e, next) => (files.has(e.path) ? { value: files.get(e.path) ?? '' } : next(e)))
+  return files
+}
+
 export function bottom(on: TestOn, writes?: Write[] | 'reject', env: Record<string, string> = ENV, version = NODE.stdout) {
   mock.env(on, env)
   on('agent.list', () => ({ value: [AGENT] }))
