@@ -194,8 +194,12 @@ async function* nestedStep(
   nested: { key: string; report?: string },
   signal: AbortSignal,
 ): AsyncGenerator<TurnStepChunk, TurnStepResult> {
+  // session.append makes a native user row without submitting another task or steering Codex twice.
+  const user = async (text: string) => {
+    await $.session.append({ agentId, message: { type: 'user', content: [{ type: 'text', text }] } })
+  }
   const job = w.jobs.get(agentId)
-  if (job !== undefined) return yield* pump(w, job, e, signal)
+  if (job !== undefined) return yield* pump(w, job, e, signal, user)
   // After its handback, or a later message: the answer again, as text.
   if (nested.report !== undefined) return yield* respond(e, textChunks(nested.report), nested.report)
   const abort = new AbortController()
@@ -209,7 +213,7 @@ async function* nestedStep(
     count: 0,
   }
   w.jobs.set(agentId, started)
-  return yield* pump(w, started, e, signal)
+  return yield* pump(w, started, e, signal, user)
 }
 
 // A run outlives the step that started it: each harness tool call ends a step with a call to via's

@@ -12,8 +12,9 @@ type Queued = Norm | { readonly k: 'end'; readonly failure?: string } | { readon
 export type Channel = {
   readonly key: string // this assignment's: a child's work after an end is a new nested agent
   readonly type: string // the nested agent's subagent_type
-  readonly title: string
-  readonly description?: string
+  title: string
+  description?: string
+  readonly parent?: string
   model?: string
   readonly queue: Queued[]
   wake?: () => void
@@ -44,15 +45,18 @@ export function route(w: Children, agentId: string, type: string, event: Extract
   // clears its cancel capability after it goes idle). Work after an end is a new assignment of the same
   // child: a new nested agent, as Claude Code shows one; its model snapshot is not work.
   const working = (event.k === 'of' && event.norm.k !== 'model') || (event.k === 'child' && event.state === 'running')
-  const announced = event.k === 'child' && event.title !== undefined
+  const announced = event.k === 'child' && (event.title !== undefined || event.description !== undefined)
   if (channel === undefined ? working || announced || event.k === 'of' : channel.ended && working) {
     const title = (event.k === 'child' ? event.title : undefined) ?? channel?.title ?? 'subagent'
-    const description = event.k === 'child' ? event.description : channel?.description
+    const description =
+      event.k === 'child' ? (event.description ?? channel?.description) : event.norm.k === 'user' ? event.norm.t : channel?.description
+    const parentId = event.k === 'child' ? event.parent : channel?.parent
     const assignment = `${key(id)}#${channel ? Number(channel.key.slice(channel.key.lastIndexOf('#') + 1)) + 1 : 1}`
     channel = {
       key: assignment,
       type,
       title,
+      ...(parentId ? { parent: parentId } : {}),
       ...(description ? { description } : {}),
       queue: [],
       spawned: true,
@@ -62,17 +66,23 @@ export function route(w: Children, agentId: string, type: string, event: Extract
     }
     w.channels.set(key(id), channel)
     w.channels.set(assignment, channel)
-    const parent = event.k === 'child' ? w.channels.get(key(event.parent)) : undefined
+    const parent = parentId ? w.channels.get(key(parentId)) : undefined
     if (parent !== undefined) put(parent, { k: 'spawn', child: assignment })
     else marks.push({ kind: 'spawn', child: assignment, type, title, ...(description ? { description } : {}) })
+    // The opening user message is already the native Agent prompt for this assignment.
+    if (event.k === 'of' && event.norm.k === 'user') return marks
   }
   if (channel === undefined) return marks
   if (event.k === 'of') {
     if (event.norm.k === 'model') channel.model = event.norm.name
     put(channel, event.norm)
-  } else if (event.state === 'idle' && !channel.ended) {
-    channel.ended = true
-    put(channel, { k: 'end', ...(event.failure ? { failure: event.failure } : {}) })
+  } else {
+    if (event.title) channel.title = event.title
+    if (event.description !== undefined) channel.description = event.description
+    if (event.state === 'idle' && !channel.ended) {
+      channel.ended = true
+      put(channel, { k: 'end', ...(event.failure ? { failure: event.failure } : {}) })
+    }
   }
   return marks
 }
@@ -127,6 +137,8 @@ export function closeChildren(w: Children, agentId: string, failure?: string): v
 
 // A nested agent's run: its child's rows and messages, then its last message as the answer, signed with
 // the model the child's session reported.
+const PLAN_MARKS: Record<string, string> = { pending: '☐', in_progress: '◐', completed: '☑' }
+
 export async function* childRun(
   w: Children,
   agentId: string,
@@ -138,15 +150,17 @@ export async function* childRun(
   const nested = w.nested.get(agentId)
   const channel = nested === undefined ? undefined : w.channels.get(nested.key)
   let index = -1
-  let kind: 'text' | undefined
+  let kind: 'text' | 'thinking' | undefined
   let report = ''
+  let plan = ''
+  let plans = 0
   let failure: string | undefined
-  const text = (t: string): TurnStepChunk => {
-    if (kind !== 'text') {
-      kind = 'text'
+  const push = (k: 'text' | 'thinking', text: string): TurnStepChunk => {
+    if (kind !== k) {
+      kind = k
       index += 1
     }
-    return { kind: 'text', index, text: t }
+    return { kind: k, index, text }
   }
   for (;;) {
     const item = channel?.queue.shift() ?? (channel === undefined ? ({ k: 'end' } as const) : undefined)
@@ -178,10 +192,27 @@ export async function* childRun(
           title: grand.title,
           ...(grand.description ? { description: grand.description } : {}),
         }
-    } else if (item.k === 'message') report = ''
-    else if (item.k === 'text') {
+    } else if (item.k === 'user') {
+      report = ''
+      kind = undefined
+      yield { kind: 'user', text: item.t }
+    } else if (item.k === 'message') {
+      report = ''
+      kind = undefined
+    } else if (item.k === 'text') {
       report += item.t
-      yield text(item.t)
+      yield push('text', item.t)
+    } else if (item.k === 'thinking') yield push('thinking', item.t)
+    else if (item.k === 'plan') {
+      // The same changed-plan row the top-level run shows, separate from the child's answer.
+      const listed = item.entries.map((entry) => `${PLAN_MARKS[entry.status] ?? '☐'} ${entry.content}`).join('\n')
+      if (listed === plan) continue
+      plan = listed
+      kind = undefined
+      plans += 1
+      const id = `plan-${plans}`
+      yield { kind: 'call-start', id, input: { kind: 'plan', title: 'Plan' }, usage: null }
+      yield { kind: 'call-end', id, output: listed, failed: false }
     } else if (item.k === 'call') {
       kind = undefined
       yield {
@@ -195,7 +226,7 @@ export async function* childRun(
   const said = report.trim() || (failure ? `The ${name} subagent failed: ${failure}` : `The ${name} subagent ended without a message.`)
   const signed = `${said}\n\n— answered by ${name} subagent${channel?.model ? `, ${channel.model}` : ''}`
   if (nested) nested.report = signed
-  yield text(`\n\n— answered by ${name} subagent${channel?.model ? `, ${channel.model}` : ''}`)
+  yield push('text', `\n\n— answered by ${name} subagent${channel?.model ? `, ${channel.model}` : ''}`)
   if (handback) return yield* deliver(name, e, { prompt: '', report: signed, delivered: false }, index + 1, signed, null)
   return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], signed)
 }
