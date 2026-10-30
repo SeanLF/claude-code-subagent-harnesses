@@ -195,7 +195,7 @@ async function* nestedStep(
   signal: AbortSignal,
 ): AsyncGenerator<TurnStepChunk, TurnStepResult> {
   const job = w.jobs.get(agentId)
-  if (job !== undefined) return yield* pump(w, job, e, signal)
+  if (job !== undefined) return yield* pump(w, job, e, signal, () => $.viaSteps.wait({ agentId }))
   // After its handback, or a later message: the answer again, as text.
   if (nested.report !== undefined) return yield* respond(e, textChunks(nested.report), nested.report)
   const abort = new AbortController()
@@ -209,7 +209,7 @@ async function* nestedStep(
     count: 0,
   }
   w.jobs.set(agentId, started)
-  return yield* pump(w, started, e, signal)
+  return yield* pump(w, started, e, signal, () => $.viaSteps.wait({ agentId }))
 }
 
 // A run outlives the step that started it: each harness tool call ends a step with a call to via's
@@ -228,14 +228,14 @@ export async function* turnStep(w: World, $: Parameters<StepHook>[0], e: Paramet
   }
   const job = w.jobs.get(agentId)
   if (job !== undefined) {
-    if (job.turnId === e.turnId) return yield* pump(w, job, e, next.signal)
+    if (job.turnId === e.turnId) return yield* pump(w, job, e, next.signal, () => $.viaSteps.wait({ agentId }))
     endJob(w, agentId)
   }
   const started = yield* begin(w, adapter, $, e, agentId)
   if (started === undefined) return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], '')
   if ('answer' in started) return started
   w.jobs.set(agentId, started)
-  return yield* pump(w, started, e, next.signal)
+  return yield* pump(w, started, e, next.signal, () => $.viaSteps.wait({ agentId }))
 }
 
 // Everything before the run: refusals answer at once; otherwise the run as a job.

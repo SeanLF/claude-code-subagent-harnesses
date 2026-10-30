@@ -1,4 +1,4 @@
-import type { TurnStepChunk, TurnStepResult, TurnUsage } from 'claude-code'
+import type { Timer, TurnStepChunk, TurnStepResult, TurnUsage } from 'claude-code'
 import { NO_OUTPUT } from './render'
 
 // One step per harness tool call. A run outlives the step that started it: each tool call the
@@ -25,6 +25,7 @@ export type Job = {
   final?: TurnStepResult
   abort: AbortController
   count: number
+  reading?: Promise<IteratorResult<TurnStepChunk | Mark, TurnStepResult>>
 }
 
 // The plugin's tool, by its registered name, and the runs and calls in flight.
@@ -35,6 +36,36 @@ export type Steps = {
   calls: Map<string, { agentId: string; id: string }> // by tool_use_id: the harness's own call id
 }
 
+// A read can outlive the hook that started it. Reuse it when a later step joins.
+function read(job: Job): Promise<IteratorResult<TurnStepChunk | Mark, TurnStepResult>> {
+  job.reading ??= job.gen.next()
+  return job.reading
+}
+
+async function take(job: Job): Promise<IteratorResult<TurnStepChunk | Mark, TurnStepResult>> {
+  const result = await read(job)
+  job.reading = undefined
+  return result
+}
+
+// The current step joins an inherited read through an engine noun. Bound each noun
+// reply below its own ten-second deadline, even during a long model/tool silence.
+export async function waitStep(w: Steps, agentId: string, after: (wake: () => void) => Timer): Promise<void> {
+  const job = w.jobs.get(agentId)
+  if (!job || job.final !== undefined || job.abort.signal.aborted) return
+  let timer: Timer | undefined
+  try {
+    await Promise.race([
+      read(job),
+      new Promise<void>((resolve) => {
+        timer = after(resolve)
+      }),
+    ])
+  } finally {
+    timer?.cancel()
+  }
+}
+
 // The Agent calls a step makes for a harness's subagents: approved without the mode's classifier, which
 // judges only a model's own calls, and their nested agents run as via's.
 export const CHILD_CALL = 'toolu_via_child_'
@@ -42,6 +73,15 @@ export const CHILD_CALL = 'toolu_via_child_'
 // What a run ended early answers its next step: an aborted run's end of turn, as drive's own.
 function ended(turnId: string): TurnStepResult {
   return { turnId, index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+}
+
+// Aborted (Esc, a new turn) with the run parked at a yield, which nothing would pull on to the race that
+// stops it: ending it runs its cleanup, which stops the harness. A wait would only return at once.
+function halted(job: Job): boolean {
+  if (!job.abort.signal.aborted) return false
+  job.final ??= ended(job.turnId)
+  void job.gen.return(undefined as never).catch(() => {})
+  return true
 }
 
 // Stops a run no step will read again: a new turn, or the turn's end.
@@ -67,6 +107,7 @@ export async function* pump(
   job: Job,
   e: { turnId: string; index: number; agentId?: string },
   signal: AbortSignal,
+  wait?: () => Promise<void>,
 ): AsyncGenerator<TurnStepChunk, TurnStepResult> {
   const unlend = lend(job, signal)
   // Block indexes start again at each step.
@@ -81,10 +122,14 @@ export async function* pump(
       const heldChunk = job.held.shift()
       if (heldChunk !== undefined) c = heldChunk
       else if (job.final !== undefined) {
-        w.jobs.delete(e.agentId ?? '')
+        // A new turn may already hold this agent's slot.
+        if (w.jobs.get(e.agentId ?? '') === job) w.jobs.delete(e.agentId ?? '')
         return { ...job.final, turnId: e.turnId, index: e.index }
-      } else {
-        const r = await job.gen.next()
+      } else if (halted(job)) continue
+      else {
+        const r = wait ? await Promise.race([read(job), wait().then(() => undefined)]) : await take(job)
+        if (r === undefined) continue
+        job.reading = undefined
         if (r.done) {
           // A generator ended from outside returns nothing: without a final, this loop would spin.
           job.final = r.value ?? ended(e.turnId)
@@ -150,15 +195,8 @@ export async function answerCall(
         w.calls.delete(toolUseId as string)
         return done.failed ? { result: done.output || 'failed', isError: true } : { result: done.output || NO_OUTPUT }
       }
-      if (job.final !== undefined) return { result: 'The harness run ended before this call finished.' }
-      // Aborted (Esc) with the run parked at a yield, which nothing would pull on to the race that stops it:
-      // ending it runs its cleanup, which stops the harness.
-      if (job.abort.signal.aborted) {
-        job.final ??= ended(job.turnId)
-        void job.gen.return(undefined as never).catch(() => {})
-        return { result: 'The harness run ended before this call finished.' }
-      }
-      const r = await job.gen.next()
+      if (job.final !== undefined || halted(job)) return { result: 'The harness run ended before this call finished.' }
+      const r = await take(job)
       if (r.done) {
         job.final = r.value
         continue
