@@ -305,6 +305,47 @@ test('a folded run of harness calls is counted by what each did, in the order ea
   expect(texts(drawGroup(group(['think', undefined]))).join('')).toBe('2 other steps')
 })
 
+test('a nested summary, current command and its output occupy separate rows', () => {
+  const title = "sed -n '275,340p' scripts/format_consolidation_partial51/format_partial_file_common_20261029.py; sed…"
+  const output = 'Corrected extension pure _scope PASS, selected count 51\nprovider prepare kwargs PASS\nfiles scope_bundle PASS tuple'
+  const props = group([...Array.from({ length: 8 }, () => 'execute'), 'read', 'execute'], true)
+  // The active group can briefly have no running calls while the next tool arrives.
+  props.calls[9] = { ...props.calls[9], input: { kind: 'execute', title }, output }
+  const row = drawGroup(props)
+  // A Box defaults to a horizontal flex row. Text alone cannot establish a row boundary.
+  expect(row).toEqual({
+    type: 'Box',
+    props: { key: 'via-group', paddingLeft: 2, flexDirection: 'column' },
+    children: [
+      {
+        type: 'Text',
+        props: { dimColor: true },
+        hover: { dimColor: false },
+        children: [
+          'Running ',
+          { type: 'Text', props: { bold: true }, children: ['9'] },
+          ' commands',
+          ', ',
+          'reading ',
+          { type: 'Text', props: { bold: true }, children: ['1'] },
+          ' file',
+          '…',
+        ],
+      },
+      {
+        type: 'Box',
+        props: { flexDirection: 'column' },
+        children: [
+          { type: 'Text', children: [{ type: 'Text', props: { bold: true }, children: ['Ran'] }, ' ', title] },
+          { type: 'Text', props: { dimColor: true }, children: ['  ⎿  Corrected extension pure _scope PASS, selected count 51'] },
+          { type: 'Text', props: { dimColor: true }, children: ['     provider prepare kwargs PASS'] },
+          { type: 'Text', props: { dimColor: true }, children: ['     files scope_bundle PASS tuple'] },
+        ],
+      },
+    ],
+  })
+})
+
 test('a folded active group shows its latest step while completed groups keep their summary', () => {
   const active = group(['read', 'execute'], true)
   const calls = active.calls.map((call, index) =>
