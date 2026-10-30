@@ -8,7 +8,7 @@ import { respond, textChunks } from './handback'
 import { HARNESSES } from './harnesses'
 import { cachedModels, refreshModels } from './models'
 import { descriptionOf, isModel, promptOf } from './prompt'
-import { followRetained, helperOf, ROSTER_UNAVAILABLE, roster, spawnOf } from './recovery'
+import { followRetained, helperOf, pruneRuns, ROSTER_UNAVAILABLE, roster, spawnOf } from './recovery'
 import { notActivePrompt } from './run'
 import { sendMessage, steer, typed } from './steer'
 import { adapterOf, remember, turnStep } from './turn'
@@ -148,6 +148,8 @@ export const register: Register = (on, options) => {
       .model()
       .then((main) => sizeWindow($, main))
       .catch(() => undefined)
+    // Retained runs are bounded on disk; pruning runs beside the session, never ahead of it.
+    void pruneRuns($).catch(() => undefined)
     // Each harness tool call reaches Claude Code as a call to this tool, served by mcp/step.mts, which
     // runs nothing: its tool.call hook answers with what the harness reported. Bash would look the same,
     // but a hook that fails is skipped and the real command would run; a call nobody answers fails.

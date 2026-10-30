@@ -57,6 +57,16 @@ function updateRoster(
   w.roster = written
   return written
 }
+// Where each run keeps its journal and answer: <root>/<agent>/<turn>/<block>.
+export async function runsRoot($: Pick<EngineInterface, 'env'>): Promise<string | undefined> {
+  const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
+  return home ? `${home}/.claude/via/runs` : undefined
+}
+// Finished runs past a week, then the oldest past 1 GiB in all, go; a running one never does.
+export async function pruneRuns($: Pick<EngineInterface, 'env' | 'plugin' | 'process'>): Promise<void> {
+  const root = await runsRoot($)
+  if (root) await $.process.run(['node', helperOf($), 'prune', root], { timeoutMs: 30_000 })
+}
 export function helperOf($: Pick<EngineInterface, 'plugin'>): string {
   return `${$.plugin.root}/relay/src/durable.mts`
 }

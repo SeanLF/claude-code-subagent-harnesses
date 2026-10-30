@@ -587,3 +587,20 @@ for (const [type, model, passes] of [
     expect(provider).toBe(passes)
     if (!passes) expect(result.answer).toContain('could not read its retained run mappings')
   })
+
+test('a session start prunes retained runs beside the session, without waiting on it', async ($, on) => {
+  mock.env(on, { PATH: '/nowhere', HOME: '/home/u' })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.model', () => ({ value: 'claude-haiku-5-5' }))
+  on('fs.stat', () => {
+    throw new Error('ENOENT')
+  })
+  const runs: string[][] = []
+  on('process.run', (_, e) => {
+    runs.push([...e.argv])
+    return { value: { ...NODE } }
+  })
+  await $.session.start({ cwd: '/', surface: null, isInteractive: false })
+  await Promise.resolve()
+  expect(runs.map((argv) => argv.slice(2))).toContainEqual(['prune', '/home/u/.claude/via/runs'])
+})
