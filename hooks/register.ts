@@ -283,9 +283,12 @@ export const register: Register = (on, options) => {
     on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => sendMessage(world, $, e, next))
 
   // The matcher's type names only built-in tools; an MCP tool's full name is accepted at run time.
-  on('tool.call', { tool: STEP as 'Bash' }, (_, e, next) => answerCall(world, e.tool_use_id, next.signal)).catch(() => ({
-    deny: 'via could not report this harness tool call.',
-  }))
+  on('tool.call', { tool: STEP as 'Bash' }, (_, e, next) => answerCall(world, e.tool_use_id, next.signal)).catch(async ($, _, next) => {
+    // The row shows only the denial: keep why in the local log, as a failed step does.
+    const { kind, message } = next.error
+    await Promise.allSettled([$.ui.log(`via tool.call failed: ${JSON.stringify({ kind, message })}`)])
+    return { deny: 'via could not report this harness tool call.' }
+  })
 
   on('ui.render', { component: 'ToolUse' }, (_, e, next) => (e.props.tool === world.tool ? drawCall(e.props) : next(e)))
   // Claude Code decides which calls fold; via only counts them, and only a run of its own calls alone.
