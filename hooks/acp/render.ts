@@ -58,7 +58,7 @@ export function drawGroup(props: RenderPropsOf['ToolGroup']): RenderElement {
   })
   return {
     type: 'Box',
-    props: { key: 'via-group', paddingLeft: 2 },
+    props: { key: 'via-group', paddingLeft: 2, flexDirection: 'column' },
     children: [
       { type: 'Text', props: { dimColor: true }, hover: { dimColor: false }, children: [...parts, ...(props.isActive ? ['…'] : [])] },
       ...(current ? [drawCall({ ...current, tool_use_id: current.tool_use_id ?? '' })] : []),
