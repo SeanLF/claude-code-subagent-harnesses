@@ -305,6 +305,16 @@ test('a folded run of harness calls is counted by what each did, in the order ea
   expect(texts(drawGroup(group(['think', undefined]))).join('')).toBe('2 other steps')
 })
 
+test('a call answered while its command still runs gives way to its continuation row', () => {
+  const answered = { output: 'The harness tool is still running.' }
+  expect(texts(drawCall(call(answered)))).toEqual([])
+  expect(texts(drawCall(call({ ...answered, isExpanded: true }))).join('|')).toBe(
+    'Running| |npm test|  ⎿  The harness tool is still running.',
+  )
+  expect(texts(drawGroup(group(['execute', 'wait', 'wait']))).join('')).toBe('Ran 1 command')
+  expect(texts(drawGroup(group(['wait']))).join('')).toBe('Waited on 1 command')
+})
+
 test('a run ended from outside while parked between pieces stops its harness', async () => {
   let killed = false
   const world = {

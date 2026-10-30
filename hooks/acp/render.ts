@@ -3,6 +3,8 @@ import { unhidden } from './text'
 
 // What a call that reported no output answers; its row shows none.
 export const NO_OUTPUT = 'Done; no output reported.'
+// What a call answers when its command runs on past a step; a continuation call stands in for it.
+export const STILL_RUNNING = 'The harness tool is still running'
 
 // A diff's lines and a plan's entries are what the row is for, so more of them show before it folds;
 // a compaction's summary is not, as Claude Code keeps its own behind ctrl+o.
@@ -34,6 +36,7 @@ const COUNTED: Record<string, [string, string, string, string]> = {
   delete: ['Deleting', 'Deleted', 'file', 'files'],
   move: ['Moving', 'Moved', 'file', 'files'],
   fetch: ['Fetching', 'Fetched', 'page', 'pages'],
+  wait: ['Waiting on', 'Waited on', 'command', 'commands'],
 }
 
 // The line Claude Code folds a run of harness tool calls into, counted by what each did ("Read 3 files,
@@ -41,7 +44,9 @@ const COUNTED: Record<string, [string, string, string, string]> = {
 // counts bold, undimmed under the pointer, since a click unfolds it.
 export function drawGroup(props: RenderPropsOf['ToolGroup']): RenderElement {
   const counts = new Map<string, number>()
-  for (const call of props.calls) {
+  // A wait is a command still running after a step went by: counted with it, unless it is all there is.
+  const waits = (call: (typeof props.calls)[number]) => (call.input as { kind?: unknown } | null)?.kind === 'wait'
+  for (const call of props.calls.every(waits) ? props.calls : props.calls.filter((call) => !waits(call))) {
     const kind = (call.input as { kind?: unknown } | null)?.kind
     const counted = typeof kind === 'string' && Object.hasOwn(COUNTED, kind) ? kind : 'other'
     counts.set(counted, (counts.get(counted) ?? 0) + 1)
@@ -76,8 +81,13 @@ export function drawCall(props: RenderPropsOf['ToolUse']): RenderElement {
   const title = typeof input.title === 'string' ? unhidden(input.title).replace(/\s+/g, ' ') : ''
   const path = typeof input.path === 'string' ? unhidden(input.path) : ''
   const [running, done] = VERBS[kind] ?? ['', '']
-  const verb = props.isInterrupted ? 'Interrupted' : props.isErrored ? 'Failed' : props.isRunning ? running : done
   const said = typeof props.output === 'string' ? unhidden(props.output).trim() : ''
+  // Its continuation's row follows and shows the command: the folded view draws this one as nothing,
+  // and ctrl+o as running, never as a command that ran.
+  const continued = said.startsWith(STILL_RUNNING)
+  if (continued && !props.isExpanded) return { type: 'Box', children: [] }
+  const live = props.isRunning || continued
+  const verb = props.isInterrupted ? 'Interrupted' : props.isErrored ? 'Failed' : live ? running : done
   const output = said === NO_OUTPUT ? '' : said
   const lines = output ? output.split('\n') : []
   const shown = props.isExpanded ? lines : lines.slice(0, FOLDED[kind] ?? 3)
@@ -95,7 +105,7 @@ export function drawCall(props: RenderPropsOf['ToolUse']): RenderElement {
         type: 'Text',
         children: verb
           ? [{ type: 'Text', props: { bold: true }, children: [verb] }, ' ', named]
-          : [{ type: 'Text', props: { bold: true }, children: [named] }, ...(props.isRunning ? ['…'] : [])],
+          : [{ type: 'Text', props: { bold: true }, children: [named] }, ...(live ? ['…'] : [])],
       },
       ...shown.map((line, i) => outputLine(line, i === 0, diff)),
       ...(more > 0
