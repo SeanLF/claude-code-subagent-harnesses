@@ -188,7 +188,7 @@ async function* nestedStep(
   if (receipt) {
     const saved = await answerOf($, answerPath(receipt, nested.key))
     if (saved && !saved.aborted && saved.signed.trim()) nested.report = saved.signed
-    else if (kept?.nested) await attachChild(w, $, adapter, nested.key, kept.nested.parent, receipt)
+    else if (kept?.nested) await attachChild(w, $, adapter, nested.key, kept.nested.parent, receipt, signal)
   }
   // After its handback, or a later message: the answer again, as text.
   if (nested.report !== undefined) return yield* retained(w, $, adapter, e, agentId, nested.report)

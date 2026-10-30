@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import * as steps from '../hooks/acp/steps'
 import { pi } from '../hooks/adapters/pi'
-import { keepSpawn, remember } from '../hooks/recovery'
+import { waitChild } from '../hooks/children'
+import { attachChild, followRetained, keepSpawn, remember } from '../hooks/recovery'
 import { run as runHook } from '../hooks/run'
 import type { World } from '../hooks/world'
 import { lines, NODE, run, STEP, storage } from './helpers'
@@ -503,4 +504,65 @@ test('a failed spawn mapping write still shows the child and keeps the run going
   expect(result.value.toolUses[0]?.name).toBe('Agent')
   expect(job.abort.signal.aborted).toBe(false)
   expect([...world.spawns.values()]).toEqual(['a1/t1-0/child#1'])
+})
+
+test('resumed children wait for the journal through engine waits, on a follower no caller owns', async () => {
+  const lines: string[] = []
+  let wakeStream = () => {}
+  let finished = false
+  let engineSpawns = 0
+  let exit = (_: { code: number; signal: null }) => {}
+  const stream = Object.assign(
+    (async function* () {
+      for (;;) {
+        while (lines.length > 0) yield { stream: 'stdout' as const, text: lines.shift() as string }
+        if (finished) return
+        await new Promise<void>((resolve) => {
+          wakeStream = resolve
+        })
+      }
+    })(),
+    {
+      result: new Promise<{ code: number; signal: null }>((resolve) => {
+        exit = resolve
+      }),
+    },
+  )
+  const plugin = { name: 'via', root: '/plugin' }
+  const world = { channels: new Map(), nested: new Map() } as unknown as World
+  const start = () => {
+    engineSpawns += 1
+    return stream as unknown as ReturnType<Parameters<typeof followRetained>[1]>
+  }
+  const adapter = { name: 'codex', events: () => (line: string) => [JSON.parse(line)] } as unknown as Parameters<typeof attachChild>[2]
+  let waits = 0
+  const caller = {
+    plugin,
+    // The engine nouns: bounded, and here never timing out, so only an arrival ends a wait.
+    viaChildren: {
+      follow: async (input: { type: string; parent: string; receipt: { path: string } }) =>
+        followRetained(world, start, input.type, adapter, input.parent, input.receipt),
+      wait: ({ key }: { key: string }) => {
+        waits += 1
+        return waitChild(world, key, () => ({ cancel: () => {} }))
+      },
+    },
+  } as unknown as Parameters<typeof attachChild>[1]
+  const receipt = { turnId: 'old', path: '/private/parent', choice: {}, mode: 'default' as const }
+  const first = attachChild(world, caller, adapter, 'a1/child#1', 'a1', receipt)
+  // A sibling that stops before its child shows up leaves the follower to the others.
+  const stopped = new AbortController()
+  stopped.abort()
+  await attachChild(world, caller, adapter, 'a1/other#1', 'a1', receipt, stopped.signal)
+  await Promise.resolve()
+  expect(waits).toBeGreaterThanOrEqual(1)
+  lines.push(`${JSON.stringify({ k: 'child', id: 'child', parent: 'root', title: 'Inspect', state: 'running' })}\n`)
+  wakeStream()
+  await first
+  expect(world.channels.has('a1/child#1')).toBe(true)
+  expect(world.channels.get('a1/child#1')?.closed).toBe(false)
+  expect(engineSpawns).toBe(1)
+  finished = true
+  wakeStream()
+  exit({ code: 0, signal: null })
 })

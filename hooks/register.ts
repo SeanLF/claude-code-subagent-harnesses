@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import type { ViaChildren } from '../types'
 import { drawCall, drawGroup } from './acp/render'
 import { answerCall, CHILD_CALL, endJob } from './acp/steps'
 import type { Adapter } from './adapter'
@@ -7,7 +8,7 @@ import { respond, textChunks } from './handback'
 import { HARNESSES } from './harnesses'
 import { cachedModels, refreshModels } from './models'
 import { descriptionOf, isModel, promptOf } from './prompt'
-import { helperOf, ROSTER_UNAVAILABLE, roster, spawnOf } from './recovery'
+import { followRetained, helperOf, ROSTER_UNAVAILABLE, roster, spawnOf } from './recovery'
 import { notActivePrompt } from './run'
 import { sendMessage, steer, typed } from './steer'
 import { adapterOf, remember, turnStep } from './turn'
@@ -131,7 +132,13 @@ export const register: Register = (on, options) => {
     const built = await next(e)
     return {
       ...built,
-      viaChildren: { wait: ({ key }: { key: string }) => waitChild(world, key, (wake) => built.clock.after(5_000, wake)) },
+      viaChildren: {
+        wait: ({ key }: { key: string }) => waitChild(world, key, (wake) => built.clock.after(5_000, wake)),
+        follow: async ({ harness, type, parent, argv, receipt }: Parameters<ViaChildren['follow']>[0]) => {
+          const adapter = world.adapters.get(harness)
+          if (adapter) followRetained(world, () => built.process.spawn({ argv }), type, adapter, parent, receipt)
+        },
+      },
     }
   })
   on('session.start', async ($, e, next) => {
