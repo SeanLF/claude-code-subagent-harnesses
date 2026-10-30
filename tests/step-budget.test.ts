@@ -110,3 +110,38 @@ test('an aborted run ends its step instead of waiting again and again for a read
   expect(starts).toBe(1)
   expect(world.jobs.get('fixture')).toBe(newer)
 })
+
+test('a tool call joins the read an earlier step left pending, in order', async () => {
+  let release = () => {}
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const job: steps.Job = {
+    turnId: 't1',
+    count: 0,
+    abort: new AbortController(),
+    outputs: new Map(),
+    held: [],
+    gen: (async function* () {
+      await pending
+      yield { kind: 'call-end' as const, id: 'one', output: 'first', failed: false }
+      yield { kind: 'call-end' as const, id: 'one', output: 'second', failed: false }
+      return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+    })(),
+  }
+  const world: steps.Steps = {
+    tool: 'mcp__plugin_via_step__step',
+    spawns: new Map(),
+    jobs: new Map([['fixture', job]]),
+    calls: new Map([['toolu_one', { agentId: 'fixture', id: 'one' }]]),
+  }
+  // A step's bounded wait ends while the producer read is still pending: the read is retained.
+  await steps.waitStep(world, 'fixture', (wake) => {
+    queueMicrotask(wake)
+    return { cancel: () => {} }
+  })
+  const answer = steps.answerCall(world, 'toolu_one', new AbortController().signal)
+  await settle()
+  release()
+  expect(await answer).toEqual({ result: 'first' })
+})

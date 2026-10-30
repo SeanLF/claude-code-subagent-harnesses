@@ -196,7 +196,7 @@ export async function answerCall(
         return done.failed ? { result: done.output || 'failed', isError: true } : { result: done.output || NO_OUTPUT }
       }
       if (job.final !== undefined || halted(job)) return { result: 'The harness run ended before this call finished.' }
-      const r = await job.gen.next()
+      const r = await take(job)
       if (r.done) {
         job.final = r.value
         continue
