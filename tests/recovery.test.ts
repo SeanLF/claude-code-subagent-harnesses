@@ -566,3 +566,24 @@ test('resumed children wait for the journal through engine waits, on a follower 
   wakeStream()
   exit({ code: 0, signal: null })
 })
+
+for (const [type, model, passes] of [
+  ['general-purpose', 'haiku', true],
+  ['general-purpose', 'gpt-6.1-sol', false],
+  ['via:pi', 'haiku', false],
+] as const)
+  test(`an unreadable roster lets only a plain Claude subagent through (${type}, ${model})`, async ($, on) => {
+    on('store.get', () => {
+      throw new Error('unreadable store')
+    })
+    on('agent.list', () => ({ value: [{ id: 'a1', description: 'x', type, status: 'running' }] }))
+    let provider = false
+    on('turn.step', async function* (_, e) {
+      provider = true
+      yield { kind: 'text', index: 0, text: 'provider' }
+      return { turnId: e.turnId, index: e.index, answer: 'provider', stopReason: 'end_turn', toolUses: [], usage: null }
+    })
+    const { result } = await run($, { ...STEP, model })
+    expect(provider).toBe(passes)
+    if (!passes) expect(result.answer).toContain('could not read its retained run mappings')
+  })

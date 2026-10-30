@@ -320,10 +320,16 @@ export const register: Register = (on, options) => {
 
   on('turn.step', async function* ($, e, next) {
     return yield* turnStep(world, $, e, next)
-  }).catch(async function* (_, e, next) {
+  }).catch(async function* ($, e, next) {
     const adapter = e.agentId === undefined ? undefined : world.agents.get(e.agentId)
-    if (!adapter && next.error.message?.includes(ROSTER_UNAVAILABLE))
+    if (!adapter && next.error.message?.includes(ROSTER_UNAVAILABLE)) {
+      // Fail closed for anything that may be via's: a resumed via agent can list as general-purpose,
+      // but its step then names the harness's model. A listed non-via agent on a Claude model is Claude's.
+      const listed = e.agentId === undefined ? undefined : (await $.agent.list().catch(() => [])).find((a) => a.id === e.agentId)
+      const claude = listed !== undefined && !listed.type.startsWith(`${$.plugin.name}:`) && CLAUDE.test(e.model)
+      if (claude) return yield* next(e)
       return yield* respond(e, textChunks(ROSTER_UNAVAILABLE), ROSTER_UNAVAILABLE)
+    }
     if (!adapter) return yield* next(e)
     // A skipped hook would send this harness's model id to Anthropic. End the via turn instead.
     endJob(world, e.agentId as string)
