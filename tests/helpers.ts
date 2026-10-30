@@ -75,7 +75,6 @@ export function storage(on: TestOn, options: { get?: (key: string) => unknown; r
   return files
 }
 
-
 export function bottom(on: TestOn, writes?: Write[] | 'reject', env: Record<string, string> = ENV, version = NODE.stdout) {
   mock.env(on, env)
   on('agent.list', () => ({ value: [AGENT] }))
