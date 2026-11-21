@@ -2,6 +2,6 @@
   "private": true,
   "description": "The Codex CLI version CI's harnesses job tests via with. via runs the person's own codex, usually the latest release: Dependabot bumps this.",
   "dependencies": {
-    "@openai/codex": "0.169.0"
+    "@openai/codex": "0.170.0"
   }
 }
