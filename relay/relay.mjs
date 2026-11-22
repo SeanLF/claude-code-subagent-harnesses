@@ -11,7 +11,1227 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileS
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/index.js
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/jsonrpc.js
+var CANCEL_REQUEST_METHOD = "$/cancel_request";
+function treatSessionNotFoundAsSuccess(method, response, success) {
+  if (method !== "session/close" && method !== "session/delete") {
+    return response;
+  }
+  return response.catch((error2) => {
+    if (error2 instanceof RequestError && error2.code === -32002) {
+      return success();
+    }
+    throw error2;
+  });
+}
+function isRequestMessage(value) {
+  return isJsonRpcEnvelope(value) && "id" in value && typeof value["method"] === "string" && isJsonRpcId(value["id"]);
+}
+function isResponseMessage(value) {
+  if (!isJsonRpcEnvelope(value) || "method" in value) {
+    return false;
+  }
+  if (!("id" in value) || !isJsonRpcId(value["id"])) {
+    return false;
+  }
+  const hasResult = Object.hasOwn(value, "result");
+  const hasError = Object.hasOwn(value, "error");
+  if (hasResult === hasError) {
+    return false;
+  }
+  return !hasError || isErrorResponse(value["error"]);
+}
+function isNotificationMessage(value) {
+  return isJsonRpcEnvelope(value) && !("id" in value) && typeof value["method"] === "string";
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
+function isJsonRpcEnvelope(value) {
+  return isRecord(value) && value["jsonrpc"] === "2.0";
+}
+function isJsonRpcId(value) {
+  return value === null || typeof value === "string" || typeof value === "number" && Number.isFinite(value);
+}
+function isResponseShapedMessage(value) {
+  return isRecord(value) && !("method" in value) && ("id" in value || "result" in value || "error" in value);
+}
+function cancelRequestId(params) {
+  if (!isRecord(params) || !isJsonRpcId(params["requestId"])) {
+    return void 0;
+  }
+  return params["requestId"];
+}
+function isErrorResponse(value) {
+  return isRecord(value) && typeof value["code"] === "number" && Number.isInteger(value["code"]) && typeof value["message"] === "string";
+}
+var Handled = {
+  /**
+   * Marks a message as handled.
+   */
+  yes() {
+    return { handled: true };
+  },
+  /**
+   * Leaves a message unhandled so later handlers can process it.
+   */
+  no(message, retry = false) {
+    return { handled: false, message, retry };
+  }
+};
+var taskChannel;
+var tasksAwaited = [];
+function openTaskChannel() {
+  const { port1: receiver, port2: sender } = new MessageChannel();
+  const channel = { sender, receiver };
+  receiver.onmessage = () => {
+    tasksAwaited.shift()?.();
+    if (tasksAwaited.length > 0) {
+      return;
+    }
+    if (channel.receiver.unref) {
+      channel.receiver.unref();
+    } else {
+      channel.receiver.close();
+      taskChannel = void 0;
+    }
+  };
+  return channel;
+}
+function nextTask() {
+  return new Promise((resolve) => {
+    if (typeof MessageChannel !== "function") {
+      if (typeof setImmediate === "function") {
+        setImmediate(resolve);
+      } else {
+        setTimeout(resolve, 0);
+      }
+      return;
+    }
+    taskChannel ??= openTaskChannel();
+    if (tasksAwaited.push(resolve) === 1) {
+      taskChannel.receiver.ref?.();
+    }
+    taskChannel.sender.postMessage(void 0);
+  });
+}
+function rejectedPromise(error2) {
+  const promise = Promise.reject(error2);
+  promise.catch(() => {
+  });
+  return promise;
+}
+function errorDetails(error2) {
+  if (error2 instanceof Error) {
+    return error2.message;
+  }
+  if (typeof error2 === "object" && error2 != null && "message" in error2 && typeof error2.message === "string") {
+    return error2.message;
+  }
+  return void 0;
+}
+function isZodError(error2) {
+  return typeof error2 === "object" && error2 !== null && "name" in error2 && error2.name === "ZodError" && "issues" in error2 && Array.isArray(error2.issues) && "format" in error2 && typeof error2.format === "function";
+}
+function describeInvalidMessage(message) {
+  if (Array.isArray(message)) {
+    return { type: "array" };
+  }
+  if (isRecord(message)) {
+    return { type: "object", keys: Object.keys(message) };
+  }
+  return { type: message === null ? "null" : typeof message };
+}
+function errorToResult(error2) {
+  if (error2 instanceof RequestError) {
+    return error2.toResult();
+  }
+  if (isZodError(error2)) {
+    return RequestError.invalidParams(error2.format()).toResult();
+  }
+  const details = errorDetails(error2);
+  try {
+    return RequestError.internalError(details ? JSON.parse(details) : {}).toResult();
+  } catch {
+    return RequestError.internalError({ details }).toResult();
+  }
+}
+function requestCancelledError(reason2) {
+  if (reason2 instanceof RequestError && reason2.code === -32800) {
+    return reason2;
+  }
+  return RequestError.requestCancelled(reason2);
+}
+function errorToRequestResult(error2, signal) {
+  const requestCancelled = abortErrorToRequestCancelled(error2, signal);
+  return requestCancelled ? requestCancelled.toResult() : errorToResult(error2);
+}
+function abortErrorToRequestCancelled(error2, signal) {
+  if (!signal.aborted || !isAbortError(error2)) {
+    return void 0;
+  }
+  return requestCancelledError(signal.reason);
+}
+function isAbortError(error2) {
+  if (typeof error2 !== "object" || error2 === null) {
+    return false;
+  }
+  const maybeAbortError = error2;
+  return maybeAbortError.name === "AbortError" || maybeAbortError.code === "ABORT_ERR";
+}
+var RequestResponder = class {
+  id;
+  sendResult;
+  signal;
+  finishRequest;
+  didRespond = false;
+  constructor(id, sendResult, signal = new AbortController().signal, finishRequest) {
+    this.id = id;
+    this.sendResult = sendResult;
+    this.signal = signal;
+    this.finishRequest = finishRequest;
+  }
+  /**
+   * Whether this request has already received a response.
+   */
+  get responded() {
+    return this.didRespond;
+  }
+  /**
+   * Sends a successful JSON-RPC response.
+   */
+  respond(response) {
+    return this.respondWithResult({ result: response ?? null });
+  }
+  /**
+   * Sends an error JSON-RPC response.
+   */
+  respondWithError(error2) {
+    const errorResponse = error2 instanceof RequestError ? error2.toErrorResponse() : error2;
+    return this.respondWithResult({ error: errorResponse });
+  }
+  /**
+   * Sends a complete JSON-RPC result payload.
+   */
+  respondWithResult(result2) {
+    if (this.didRespond) {
+      return rejectedPromise(new Error("JSON-RPC request already responded"));
+    }
+    this.didRespond = true;
+    return this.sendResult(result2).finally(() => {
+      this.finishRequest?.();
+    });
+  }
+};
+var nullIdResponders = /* @__PURE__ */ new WeakSet();
+var HandlerRegistration = class {
+  disposeHandler;
+  active = true;
+  constructor(disposeHandler) {
+    this.disposeHandler = disposeHandler;
+  }
+  /**
+   * Unregisters the associated handler.
+   */
+  dispose() {
+    if (!this.active) {
+      return;
+    }
+    this.active = false;
+    this.disposeHandler();
+  }
+  /**
+   * Supports explicit resource management with `using`.
+   */
+  [Symbol.dispose]() {
+    this.dispose();
+  }
+  /**
+   * Returns this registration for call sites that intentionally keep it active.
+   */
+  runIndefinitely() {
+    return this;
+  }
+};
+var ConnectionContext = class {
+  connection;
+  constructor(connection) {
+    this.connection = connection;
+  }
+  /**
+   * Sends a request over the connection.
+   */
+  sendRequest(method, params, mapResponse, options) {
+    return this.connection.sendRequest(method, params, mapResponse, options);
+  }
+  /**
+   * Sends a notification over the connection.
+   */
+  sendNotification(method, params) {
+    return this.connection.sendNotification(method, params);
+  }
+  /**
+   * Sends a protocol-level request cancellation notification.
+   */
+  sendCancelRequest(requestId) {
+    return this.connection.sendCancelRequest(requestId);
+  }
+  /**
+   * Registers a handler that can be disposed independently.
+   */
+  addDynamicHandler(handler) {
+    return this.connection.addDynamicHandler(handler);
+  }
+  /**
+   * AbortSignal that aborts when the connection closes.
+   *
+   * Unless `close()` closed the connection, notifications received before it
+   * closed can still reach their handlers after the signal aborts.
+   */
+  get signal() {
+    return this.connection.signal;
+  }
+  /**
+   * Promise that resolves when the connection closes.
+   *
+   * Unless `close()` closed the connection, notifications received before it
+   * closed can still reach their handlers after this resolves.
+   */
+  get closed() {
+    return this.connection.closed;
+  }
+};
+var Connection = class {
+  pendingResponses = /* @__PURE__ */ new Map();
+  incomingRequests = /* @__PURE__ */ new Map();
+  nextRequestId = 0;
+  staticHandlers = [];
+  dynamicHandlers = /* @__PURE__ */ new Set();
+  fallbackHandlers = [];
+  stream;
+  writeQueue = Promise.resolve();
+  abortController = new AbortController();
+  closedPromise;
+  retryQueue = [];
+  context = new ConnectionContext(this);
+  receiveReader;
+  // Whether `close()` closed the connection. Otherwise the peer ended its
+  // stream, or reading or writing failed, and the notifications received
+  // before then are still dispatched: the peer sent them before it went away.
+  closedLocally = false;
+  constructor(requestHandlerOrStream, notificationHandlerOrHandlers, streamOrOptions, options) {
+    if (typeof requestHandlerOrStream === "function") {
+      const requestHandler = requestHandlerOrStream;
+      const notificationHandler = notificationHandlerOrHandlers;
+      const stream3 = streamOrOptions;
+      this.initialize(stream3, [
+        ...options?.handlers ?? [],
+        this.legacyHandler(requestHandler, notificationHandler)
+      ], options);
+      return;
+    }
+    const stream2 = requestHandlerOrStream;
+    const handlers = notificationHandlerOrHandlers;
+    const connectionOptions = streamOrOptions;
+    this.initialize(stream2, [...connectionOptions?.handlers ?? [], ...handlers], connectionOptions);
+  }
+  /**
+   * Creates a builder for configuring a handler-based connection.
+   */
+  static builder() {
+    return new ConnectionBuilder();
+  }
+  /**
+   * Runs an operation while the connection is open, then closes the connection.
+   *
+   * If the stream closes before `op` settles, the returned promise rejects with
+   * the connection close reason.
+   */
+  runUntil(op) {
+    let opSettled = false;
+    const opPromise = Promise.resolve().then(() => op(this.context)).finally(() => {
+      opSettled = true;
+    });
+    const closedPromise = this.closed.then(() => {
+      if (opSettled) {
+        return new Promise(() => {
+        });
+      }
+      throw this.closedReason();
+    });
+    return Promise.race([opPromise, closedPromise]).finally(() => {
+      opSettled = true;
+      this.close();
+    });
+  }
+  /**
+   * Adds a handler after the connection has started.
+   *
+   * Any messages queued with `Handled.no(message, true)` are retried after the
+   * handler is added.
+   */
+  addDynamicHandler(handler) {
+    this.dynamicHandlers.add(handler);
+    if (this.retryQueue.length > 0) {
+      for (const message of this.retryQueue.splice(0)) {
+        void this.processIncomingMessage(message).catch((error2) => this.shutdown(error2));
+      }
+    }
+    return new HandlerRegistration(() => {
+      this.dynamicHandlers.delete(handler);
+    });
+  }
+  /**
+   * AbortSignal that aborts when the connection closes.
+   *
+   * Unless `close()` closed the connection, notifications received before it
+   * closed can still reach their handlers after the signal aborts.
+   */
+  get signal() {
+    return this.abortController.signal;
+  }
+  /**
+   * Promise that resolves when the connection closes.
+   *
+   * Unless `close()` closed the connection, notifications received before it
+   * closed can still reach their handlers after this resolves.
+   */
+  get closed() {
+    return this.closedPromise;
+  }
+  /** @internal */
+  getContext() {
+    return this.context;
+  }
+  /**
+   * Sends a JSON-RPC request.
+   *
+   * `mapResponse` can convert the raw result before the returned promise
+   * resolves.
+   */
+  sendRequest(method, params, mapResponse, options = {}) {
+    if (this.abortController.signal.aborted) {
+      return rejectedPromise(this.closedReason());
+    }
+    const request = this.prepareRequest(method, params, mapResponse, options);
+    const requestSent = this.sendMessage(request.message);
+    void requestSent.catch(() => {
+    });
+    if (options.cancellationSignal?.aborted) {
+      request.cancel();
+    }
+    return request.response;
+  }
+  /**
+   * Sends a protocol-level request cancellation notification.
+   */
+  sendCancelRequest(requestId) {
+    return this.sendNotification(CANCEL_REQUEST_METHOD, { requestId });
+  }
+  /**
+   * Sends a JSON-RPC notification.
+   */
+  sendNotification(method, params) {
+    if (this.abortController.signal.aborted) {
+      return rejectedPromise(this.closedReason());
+    }
+    return this.sendMessage({ jsonrpc: "2.0", method, params });
+  }
+  prepareRequest(method, params, mapResponse, options = {}) {
+    const id = this.nextRequestId++;
+    let cancel2 = () => {
+    };
+    const response = new Promise((resolve, reject) => {
+      const pendingResponse = {
+        resolve: (value) => {
+          try {
+            resolve(mapResponse ? mapResponse(value) : value);
+          } catch (error2) {
+            reject(error2);
+          }
+        },
+        reject
+      };
+      cancel2 = () => {
+        if (pendingResponse.cancellationSent) {
+          return;
+        }
+        pendingResponse.cancellationSent = true;
+        pendingResponse.cleanup?.();
+        void this.sendCancelRequest(id).catch(() => {
+        });
+        if (options.stopWaitingOnCancel) {
+          pendingResponse.abandoned = true;
+          reject(requestCancelledError(options.cancellationSignal?.reason));
+        }
+      };
+      options.cancellationSignal?.addEventListener("abort", cancel2, {
+        once: true
+      });
+      pendingResponse.cleanup = () => {
+        options.cancellationSignal?.removeEventListener("abort", cancel2);
+      };
+      this.pendingResponses.set(id, pendingResponse);
+    });
+    response.catch(() => {
+    });
+    return {
+      message: { jsonrpc: "2.0", id, method, params },
+      response,
+      cancel: () => cancel2()
+    };
+  }
+  /**
+   * Closes the connection and rejects pending requests. Messages received but
+   * not yet dispatched are dropped. Does nothing once the connection is closed.
+   */
+  close(error2) {
+    if (this.abortController.signal.aborted) {
+      return;
+    }
+    this.closedLocally = true;
+    this.shutdown(error2);
+  }
+  /**
+   * Closes the connection because its peer closed, as when the peer ends its
+   * stream: notifications already received are still dispatched.
+   *
+   * @internal
+   */
+  closeFromPeer(error2) {
+    this.shutdown(error2);
+  }
+  shutdown(error2) {
+    if (this.abortController.signal.aborted) {
+      return;
+    }
+    const closeError = error2 ?? new Error("ACP connection closed");
+    this.abortController.abort(closeError);
+    for (const pendingResponse of this.pendingResponses.values()) {
+      pendingResponse.cleanup?.();
+      pendingResponse.reject(closeError);
+    }
+    this.pendingResponses.clear();
+    for (const controller of this.incomingRequests.values()) {
+      controller.abort(closeError);
+    }
+    this.incomingRequests.clear();
+    void this.receiveReader?.cancel(closeError).catch(() => {
+    });
+  }
+  initialize(stream2, handlers, options) {
+    this.stream = stream2;
+    this.staticHandlers = handlers;
+    this.fallbackHandlers = [...options?.fallbackHandlers ?? []];
+    this.closedPromise = new Promise((resolve) => {
+      this.abortController.signal.addEventListener("abort", () => resolve());
+    });
+    void nextTask();
+    void this.receive();
+  }
+  legacyHandler(requestHandler, notificationHandler) {
+    return {
+      handleMessage: async (message, cx) => {
+        if (message.kind === "request") {
+          const result2 = await requestHandler(message.method, message.params, cx);
+          await message.responder.respond(result2);
+        } else {
+          await notificationHandler(message.method, message.params, cx);
+        }
+        return Handled.yes();
+      }
+    };
+  }
+  async receive() {
+    let closeError = void 0;
+    try {
+      const reader = this.stream.readable.getReader();
+      this.receiveReader = reader;
+      try {
+        while (!this.abortController.signal.aborted) {
+          const { value: message, done } = await reader.read();
+          if (this.abortController.signal.aborted) {
+            break;
+          }
+          if (done) {
+            break;
+          }
+          this.receiveUnvalidatedMessage(message);
+          await nextTask();
+        }
+      } finally {
+        if (this.receiveReader === reader) {
+          this.receiveReader = void 0;
+        }
+        reader.releaseLock();
+      }
+    } catch (error2) {
+      closeError = error2;
+    } finally {
+      this.shutdown(closeError);
+    }
+  }
+  receiveUnvalidatedMessage(message) {
+    if (Array.isArray(message)) {
+      void this.sendMessage(protocolErrorResponse(RequestError.invalidRequest(void 0, "JSON-RPC batches are not supported"))).catch(() => {
+      });
+      return;
+    }
+    if (!isRequestMessage(message) && !isNotificationMessage(message) && !isResponseShapedMessage(message)) {
+      void this.sendMessage(protocolErrorResponse(RequestError.invalidRequest(message))).catch(() => {
+      });
+      return;
+    }
+    this.receiveMessage(message);
+  }
+  receiveMessage(message) {
+    if (this.abortController.signal.aborted) {
+      return Promise.resolve();
+    }
+    if (!isRecord(message)) {
+      console.error("Invalid message", describeInvalidMessage(message));
+      return Promise.resolve();
+    }
+    if ("method" in message) {
+      if (!("id" in message)) {
+        this.handleProtocolNotification(message);
+      }
+      return this.processIncomingMessage(this.toIncomingMessage(message)).catch((error2) => this.shutdown(error2));
+    } else if ("id" in message) {
+      this.handleResponse(message);
+    } else {
+      console.error("Invalid message", describeInvalidMessage(message));
+    }
+    return Promise.resolve();
+  }
+  // Once the connection is closed, a request can no longer be answered, so
+  // only notifications are still dispatched, unless `close()` closed it.
+  dispatchStopped(message) {
+    return this.abortController.signal.aborted && (this.closedLocally || message.kind === "request");
+  }
+  async processIncomingMessage(message) {
+    if (this.dispatchStopped(message)) {
+      return;
+    }
+    let current = message;
+    let retry = false;
+    try {
+      for (const handler of [
+        ...this.staticHandlers,
+        ...this.dynamicHandlers.values(),
+        ...this.fallbackHandlers
+      ]) {
+        if (this.dispatchStopped(current)) {
+          return;
+        }
+        const result2 = await handler.handleMessage(current, this.context) ?? {
+          handled: true
+        };
+        if (result2.handled) {
+          return;
+        }
+        current = result2.message ?? current;
+        retry = retry || Boolean(result2.retry);
+      }
+      if (retry) {
+        this.retryQueue.push(current);
+      } else if (current.kind === "request") {
+        await current.responder.respondWithError(RequestError.methodNotFound(current.method));
+      }
+    } catch (error2) {
+      if (this.dispatchStopped(current)) {
+        return;
+      }
+      if (current.kind === "request" && !current.responder.responded) {
+        await current.responder.respondWithResult(errorToRequestResult(error2, current.responder.signal));
+      } else {
+        const response = errorToResult(error2);
+        if ("error" in response) {
+          console.error("Error handling notification", {
+            method: message.method,
+            code: response.error.code,
+            message: response.error.message
+          });
+        }
+      }
+    }
+  }
+  toIncomingMessage(message) {
+    if ("id" in message) {
+      const abortController = new AbortController();
+      this.incomingRequests.set(message.id, abortController);
+      const finishRequest = () => {
+        if (this.incomingRequests.get(message.id) === abortController) {
+          this.incomingRequests.delete(message.id);
+        }
+      };
+      const responder = new RequestResponder(message.id, (result2) => {
+        const response = {
+          jsonrpc: "2.0",
+          id: nullIdResponders.has(responder) ? null : message.id,
+          ...result2
+        };
+        return this.sendMessage(response);
+      }, abortController.signal, finishRequest);
+      return {
+        kind: "request",
+        method: message.method,
+        params: message.params,
+        raw: message,
+        signal: abortController.signal,
+        responder
+      };
+    }
+    return {
+      kind: "notification",
+      method: message.method,
+      params: message.params,
+      raw: message
+    };
+  }
+  handleResponse(response) {
+    const pendingResponse = this.pendingResponses.get(response.id);
+    if (pendingResponse) {
+      this.pendingResponses.delete(response.id);
+      pendingResponse.cleanup?.();
+      if (pendingResponse.abandoned) {
+        return;
+      }
+      if (!isResponseMessage(response)) {
+        pendingResponse.reject(RequestError.invalidRequest(response));
+      } else if ("result" in response) {
+        pendingResponse.resolve(response.result);
+      } else {
+        const { code, message, data } = response.error;
+        pendingResponse.reject(new RequestError(code, message, data));
+      }
+    } else {
+      console.error("Got response to unknown request", response.id);
+    }
+  }
+  handleProtocolNotification(message) {
+    if (message.method !== CANCEL_REQUEST_METHOD) {
+      return;
+    }
+    const requestId = cancelRequestId(message.params);
+    if (requestId === void 0) {
+      return;
+    }
+    const controller = this.incomingRequests.get(requestId);
+    if (!controller || controller.signal.aborted) {
+      return;
+    }
+    controller.abort(RequestError.requestCancelled({ requestId }));
+  }
+  closedReason() {
+    return this.abortController.signal.reason ?? new Error("ACP connection closed");
+  }
+  async sendMessage(message) {
+    if (this.abortController.signal.aborted) {
+      return rejectedPromise(this.closedReason());
+    }
+    this.writeQueue = this.writeQueue.then(async () => {
+      if (this.abortController.signal.aborted) {
+        throw this.closedReason();
+      }
+      const writer = this.stream.writable.getWriter();
+      try {
+        await writer.write(message);
+      } finally {
+        writer.releaseLock();
+      }
+    }).catch((error2) => {
+      this.shutdown(error2);
+      throw error2;
+    });
+    return this.writeQueue;
+  }
+};
+var ConnectionBuilder = class {
+  handlers = [];
+  fallbackHandlers = [];
+  connectionName;
+  /**
+   * Sets a diagnostic name used by handlers created from this builder.
+   */
+  name(name) {
+    this.connectionName = name;
+    return this;
+  }
+  /**
+   * Adds a raw JSON-RPC handler to the handler chain.
+   */
+  withHandler(handler) {
+    this.handlers.push(handler);
+    return this;
+  }
+  /**
+   * Adds a fallback after static and dynamic handlers. Each connection snapshots
+   * this registration alongside the builder's other handlers.
+   */
+  withFallbackHandler(handler) {
+    this.fallbackHandlers.push(handler);
+    return this;
+  }
+  /**
+   * Adds a handler that can inspect every incoming request or notification.
+   *
+   * Observer callbacks that return void pass the message through to later
+   * handlers. Return `Handled.yes()` to stop dispatch explicitly.
+   */
+  onReceiveMessage(handler) {
+    return this.withHandler({
+      handleMessage: async (message, cx) => await handler(message, cx) ?? Handled.no(message),
+      describe: () => this.connectionName ?? "onReceiveMessage"
+    });
+  }
+  /**
+   * Adds a typed request handler for one method.
+   */
+  onReceiveRequest(method, parse2, handler) {
+    return this.withHandler({
+      handleMessage: async (message, cx) => {
+        if (message.kind !== "request" || message.method !== method) {
+          return Handled.no(message);
+        }
+        const request = parse2(message.params);
+        return await handler(request, message.responder, cx) ?? Handled.yes();
+      },
+      describe: () => `${this.connectionName ?? "request"}:${method}`
+    });
+  }
+  /**
+   * Adds a typed notification handler for one method.
+   */
+  onReceiveNotification(method, parse2, handler) {
+    return this.withHandler({
+      handleMessage: async (message, cx) => {
+        if (message.kind !== "notification" || message.method !== method) {
+          return Handled.no(message);
+        }
+        const notification = parse2(message.params);
+        return await handler(notification, cx) ?? Handled.yes();
+      },
+      describe: () => `${this.connectionName ?? "notification"}:${method}`
+    });
+  }
+  /**
+   * Connects the configured handlers to a stream.
+   */
+  connect(stream2, options) {
+    return new Connection(stream2, this.handlers, {
+      ...options,
+      fallbackHandlers: [
+        ...options?.fallbackHandlers ?? [],
+        ...this.fallbackHandlers
+      ]
+    });
+  }
+  /**
+   * Connects to a stream for the lifetime of `op`, then closes the connection.
+   */
+  connectWith(stream2, op, options) {
+    return this.connect(stream2, options).runUntil(op);
+  }
+};
+var RequestError = class _RequestError extends Error {
+  code;
+  /**
+   * Additional JSON-RPC error data.
+   */
+  data;
+  constructor(code, message, data) {
+    super(message);
+    this.code = code;
+    this.name = "RequestError";
+    this.data = data;
+  }
+  /**
+   * Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.
+   */
+  static parseError(data, additionalMessage) {
+    return new _RequestError(-32700, `Parse error${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
+  }
+  /**
+   * The JSON sent is not a valid Request object.
+   */
+  static invalidRequest(data, additionalMessage) {
+    return new _RequestError(-32600, `Invalid request${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
+  }
+  /**
+   * The method does not exist / is not available.
+   */
+  static methodNotFound(method) {
+    return new _RequestError(-32601, `"Method not found": ${method}`, {
+      method
+    });
+  }
+  /**
+   * Invalid method parameter(s).
+   */
+  static invalidParams(data, additionalMessage) {
+    return new _RequestError(-32602, `Invalid params${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
+  }
+  /**
+   * Internal JSON-RPC error.
+   */
+  static internalError(data, additionalMessage) {
+    return new _RequestError(-32603, `Internal error${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
+  }
+  /**
+   * Execution of the request was aborted.
+   */
+  static requestCancelled(data, additionalMessage) {
+    return new _RequestError(-32800, `Request cancelled${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
+  }
+  /**
+   * Authentication required.
+   */
+  static authRequired(data, additionalMessage) {
+    return new _RequestError(-32e3, `Authentication required${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
+  }
+  /**
+   * A referenced resource, such as a session or file, does not exist.
+   *
+   * For an unknown or inactive session, prefer
+   * {@link RequestError.sessionNotFound}, which sets `data.sessionId` as the
+   * protocol expects.
+   */
+  static resourceNotFound(uri) {
+    return new _RequestError(-32002, `Resource not found${uri ? `: ${uri}` : ""}`, uri && { uri });
+  }
+  /**
+   * The session named by a session-scoped request does not exist or is not
+   * active on this connection.
+   *
+   * Produces a `-32002` (Resource not found) error with `data.sessionId` set
+   * to the requested session ID.
+   */
+  static sessionNotFound(sessionId) {
+    return new _RequestError(-32002, "Resource not found", {
+      sessionId
+    });
+  }
+  /**
+   * No supported protocol version is at or below the requested version.
+   *
+   * Produces a `-32022` error whose data lists the `requested` version and the
+   * `supported` versions.
+   */
+  static unsupportedProtocolVersion(requested, supported) {
+    return new _RequestError(-32022, "Unsupported protocol version", {
+      requested,
+      supported: [...supported]
+    });
+  }
+  /**
+   * Converts this error to a JSON-RPC result object.
+   */
+  toResult() {
+    return {
+      error: {
+        code: this.code,
+        message: this.message,
+        data: this.data
+      }
+    };
+  }
+  /**
+   * Converts this error to a JSON-RPC error response payload.
+   */
+  toErrorResponse() {
+    return {
+      code: this.code,
+      message: this.message,
+      data: this.data
+    };
+  }
+};
+function protocolErrorResponse(error2) {
+  return {
+    jsonrpc: "2.0",
+    id: null,
+    error: error2.toErrorResponse()
+  };
+}
+
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/stream-limits.js
+var DEFAULT_MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
+var MessageTooLargeError = class extends Error {
+  maxMessageBytes;
+  constructor(maxMessageBytes) {
+    super(`Incoming ACP data exceeds the configured ${maxMessageBytes} byte limit`);
+    this.maxMessageBytes = maxMessageBytes;
+    this.name = "MessageTooLargeError";
+  }
+};
+function resolveMaxMessageBytes(value) {
+  const maxMessageBytes = value ?? DEFAULT_MAX_MESSAGE_BYTES;
+  if (!Number.isSafeInteger(maxMessageBytes) || maxMessageBytes <= 0) {
+    throw new RangeError("maxMessageBytes must be a positive safe integer");
+  }
+  return maxMessageBytes;
+}
+var MessageBuffer = class {
+  #buffer = new Uint8Array(0);
+  #length = 0;
+  #maxMessageBytes;
+  constructor(maxMessageBytes) {
+    this.#maxMessageBytes = resolveMaxMessageBytes(maxMessageBytes);
+  }
+  get byteLength() {
+    return this.#length;
+  }
+  get lastByte() {
+    return this.#buffer[this.#length - 1];
+  }
+  #checkAppend(byteLength) {
+    if (byteLength > this.#maxMessageBytes - this.#length) {
+      this.clear();
+      throw new MessageTooLargeError(this.#maxMessageBytes);
+    }
+  }
+  append(bytes) {
+    this.#checkAppend(bytes.byteLength);
+    const length = this.#length + bytes.byteLength;
+    if (length > this.#buffer.byteLength) {
+      const capacity = Math.min(this.#maxMessageBytes, Math.max(length, this.#buffer.byteLength * 2, 1024));
+      const buffer = new Uint8Array(capacity);
+      buffer.set(this.#buffer.subarray(0, this.#length));
+      this.#buffer = buffer;
+    }
+    this.#buffer.set(bytes, this.#length);
+    this.#length = length;
+  }
+  take() {
+    const bytes = this.#buffer.subarray(0, this.#length);
+    this.clear();
+    return bytes;
+  }
+  clear() {
+    this.#buffer = new Uint8Array(0);
+    this.#length = 0;
+  }
+};
+
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/line-buffer.js
+var newline = 10;
+var carriageReturn = 13;
+var LineBuffer = class {
+  /** Bytes of the current (incomplete) line, carried across chunks. */
+  #pending;
+  #maxMessageBytes;
+  #splitOnCarriageReturn;
+  /** Whether the last line ended at a CR whose LF may start the next chunk. */
+  #afterCarriageReturn = false;
+  constructor(maxMessageBytes, { splitOnCarriageReturn = false } = {}) {
+    this.#maxMessageBytes = resolveMaxMessageBytes(maxMessageBytes);
+    this.#pending = new MessageBuffer(Math.min(Number.MAX_SAFE_INTEGER, this.#maxMessageBytes + 1));
+    this.#splitOnCarriageReturn = splitOnCarriageReturn;
+  }
+  /**
+   * Consumes a chunk, yielding each complete line without its line ending.
+   */
+  *push(chunk) {
+    let start = 0;
+    if (this.#afterCarriageReturn && chunk.byteLength > 0) {
+      this.#afterCarriageReturn = false;
+      if (chunk[0] === newline) {
+        start = 1;
+      }
+    }
+    let newlineIndex = chunk.indexOf(newline, start);
+    let carriageReturnIndex = this.#splitOnCarriageReturn ? chunk.indexOf(carriageReturn, start) : -1;
+    while (newlineIndex !== -1 || carriageReturnIndex !== -1) {
+      if (carriageReturnIndex === -1 || newlineIndex !== -1 && newlineIndex < carriageReturnIndex) {
+        yield this.#takeLine(chunk.subarray(start, newlineIndex));
+        start = newlineIndex + 1;
+        newlineIndex = chunk.indexOf(newline, start);
+      } else {
+        yield this.#takeLine(chunk.subarray(start, carriageReturnIndex));
+        start = carriageReturnIndex + 1;
+        if (start === chunk.byteLength) {
+          this.#afterCarriageReturn = true;
+        } else if (chunk[start] === newline) {
+          start++;
+          newlineIndex = chunk.indexOf(newline, start);
+        }
+        carriageReturnIndex = chunk.indexOf(carriageReturn, start);
+      }
+    }
+    if (start < chunk.byteLength) {
+      const tail = chunk.subarray(start);
+      this.#checkLine(tail);
+      this.#pending.append(tail);
+    }
+  }
+  /**
+   * Returns the trailing unterminated line and resets the buffer, or
+   * undefined if no bytes are buffered.
+   */
+  flush() {
+    this.#afterCarriageReturn = false;
+    if (this.#pending.byteLength === 0) {
+      return void 0;
+    }
+    return stripCarriageReturn(this.#pending.take());
+  }
+  clear() {
+    this.#afterCarriageReturn = false;
+    this.#pending.clear();
+  }
+  #takeLine(tail) {
+    this.#checkLine(tail);
+    if (this.#pending.byteLength === 0) {
+      return stripCarriageReturn(tail);
+    }
+    this.#pending.append(tail);
+    return stripCarriageReturn(this.#pending.take());
+  }
+  #checkLine(tail) {
+    const lastByte = tail.byteLength > 0 ? tail[tail.byteLength - 1] : this.#pending.lastByte;
+    const byteLength = this.#pending.byteLength + tail.byteLength - (lastByte === carriageReturn ? 1 : 0);
+    if (byteLength > this.#maxMessageBytes) {
+      this.clear();
+      throw new MessageTooLargeError(this.#maxMessageBytes);
+    }
+  }
+};
+function stripCarriageReturn(line) {
+  return line[line.byteLength - 1] === carriageReturn ? line.subarray(0, -1) : line;
+}
+
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/stream.js
+function failureAfterQueued() {
+  let waiting;
+  return {
+    fail(controller, error2) {
+      if (waiting) {
+        return;
+      }
+      if ((controller.desiredSize ?? 1) > 0) {
+        controller.error(error2);
+      } else {
+        waiting = { error: error2 };
+      }
+    },
+    pull(controller) {
+      if (waiting) {
+        controller.error(waiting.error);
+      }
+    }
+  };
+}
+function ndJsonStream(output, input, options = {}) {
+  const maxMessageBytes = resolveMaxMessageBytes(options.maxMessageBytes);
+  const textEncoder = new TextEncoder();
+  const textDecoder = new TextDecoder();
+  let cancelled = false;
+  let inputReader;
+  let outputWrite = Promise.resolve();
+  const failure2 = failureAfterQueued();
+  const writeJson = (message) => {
+    const content = JSON.stringify(message) + "\n";
+    const write = outputWrite.then(async () => {
+      const writer = output.getWriter();
+      try {
+        await writer.write(textEncoder.encode(content));
+      } finally {
+        writer.releaseLock();
+      }
+    });
+    outputWrite = write.catch(() => {
+    });
+    return write;
+  };
+  const readable = new ReadableStream({
+    async start(controller) {
+      const lines = new LineBuffer(maxMessageBytes);
+      const enqueueLine = async (lineBytes) => {
+        const trimmedLine = textDecoder.decode(lineBytes).trim();
+        if (!trimmedLine) {
+          return;
+        }
+        let message;
+        try {
+          message = JSON.parse(trimmedLine);
+        } catch {
+          await writeJson(protocolErrorResponse(RequestError.parseError()));
+          return;
+        }
+        if (Array.isArray(message)) {
+          await writeJson(protocolErrorResponse(RequestError.invalidRequest(void 0, "JSON-RPC batches are not supported")));
+        } else if (isRecord(message)) {
+          controller.enqueue(message);
+        } else {
+          await writeJson(protocolErrorResponse(RequestError.invalidRequest(message)));
+        }
+      };
+      const reader = input.getReader();
+      inputReader = reader;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (cancelled) {
+            return;
+          }
+          if (done) {
+            break;
+          }
+          if (!value) {
+            continue;
+          }
+          for (const line of lines.push(value)) {
+            await enqueueLine(line);
+            if (cancelled) {
+              return;
+            }
+          }
+        }
+        if (cancelled) {
+          return;
+        }
+        const lastLine = lines.flush();
+        if (lastLine) {
+          await enqueueLine(lastLine);
+        }
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        failure2.fail(controller, err);
+        void reader.cancel(err).catch(() => {
+        });
+        return;
+      } finally {
+        lines.clear();
+        if (inputReader === reader) {
+          inputReader = void 0;
+        }
+        reader.releaseLock();
+      }
+      if (cancelled) {
+        return;
+      }
+      controller.close();
+    },
+    pull(controller) {
+      failure2.pull(controller);
+    },
+    cancel(reason2) {
+      cancelled = true;
+      return inputReader?.cancel(reason2);
+    }
+  });
+  const writable = new WritableStream({
+    write(message) {
+      return writeJson(message);
+    }
+  });
+  return { readable, writable };
+}
+
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/index.js
 var AGENT_METHODS = {
   initialize: "initialize",
   authenticate: "authenticate",
@@ -6330,7 +7550,7 @@ function preprocess(fn, schema) {
   });
 }
 
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/schema-deserialize.js
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/schema-deserialize.js
 var skippedItem = /* @__PURE__ */ Symbol("skippedItem");
 function defaultOnError(schema, fallback) {
   return schema.catch(fallback);
@@ -6416,7 +7636,7 @@ function wideInt() {
   });
 }
 
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/zod.gen.js
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/zod.gen.js
 var zRequestId = union([wideInt(), string2()]).nullable();
 var zSessionId = string2();
 var zWriteTextFileRequest = object({
@@ -7038,6 +8258,7 @@ var zSessionConfigOptionCategory = union([
   literal("mode"),
   literal("model"),
   literal("model_config"),
+  literal("speed"),
   literal("thought_level"),
   string2()
 ]);
@@ -7273,22 +8494,15 @@ var zPlanItems = object({
   entries: requiredDefaultOnError(vecSkipError(zPlanEntry), () => []),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
-var zPlanFile = object({
-  planId: zPlanId,
-  uri: string2(),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zPlanMarkdown = object({
   planId: zPlanId,
   content: string2(),
+  path: defaultOnError(string2().nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zPlanUpdateContent = union([
   zPlanItems.and(object({
     type: literal("items")
-  })),
-  zPlanFile.and(object({
-    type: literal("file")
   })),
   zPlanMarkdown.and(object({
     type: literal("markdown")
@@ -7371,6 +8585,85 @@ var zCompactionUpdate = object({
 var zCompactionSummaryChunk = object({
   compactionId: zCompactionId,
   content: zContentBlock,
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPromptSuggestion = object({
+  prompt: array(zContentBlock).min(1),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPromptSuggestionsUpdate = object({
+  suggestions: vecSkipError(zPromptSuggestion),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zCursorId = string2();
+var zCursorForkCapabilities = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zCursorCapabilities = object({
+  fork: defaultOnError(zCursorForkCapabilities.nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zCursorAnchorPosition = union([
+  literal("before"),
+  literal("after"),
+  string2()
+]);
+var zCursorMessageAnchor = object({
+  messageId: zMessageId,
+  position: zCursorAnchorPosition,
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zCursorToolCallAnchor = object({
+  toolCallId: zToolCallId,
+  position: zCursorAnchorPosition,
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zCursorCompactionAnchor = object({
+  compactionId: zCompactionId,
+  position: zCursorAnchorPosition,
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zCursorAnchor = preserveCustomPayload(union([
+  zCursorMessageAnchor.and(object({
+    type: literal("user_message")
+  })),
+  zCursorMessageAnchor.and(object({
+    type: literal("agent_message")
+  })),
+  zCursorMessageAnchor.and(object({
+    type: literal("agent_thought")
+  })),
+  zCursorMessageAnchor.and(object({
+    type: literal("session_message")
+  })),
+  zCursorToolCallAnchor.and(object({
+    type: literal("tool_call")
+  })),
+  zCursorCompactionAnchor.and(object({
+    type: literal("compaction")
+  })),
+  excludeKnownTags(object({
+    type: string2()
+  }), "type", [
+    "agent_message",
+    "agent_thought",
+    "compaction",
+    "session_message",
+    "tool_call",
+    "user_message"
+  ])
+]), "type", [
+  "agent_message",
+  "agent_thought",
+  "compaction",
+  "session_message",
+  "tool_call",
+  "user_message"
+]);
+var zCursorUpdate = object({
+  cursorId: zCursorId,
+  capabilities: defaultOnError(zCursorCapabilities.nullish(), () => void 0),
+  anchor: zCursorAnchor.nullish(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zSessionCancelCapabilities = object({
@@ -7526,6 +8819,12 @@ var zSessionUpdate = union([
   zCompactionSummaryChunk.and(object({
     sessionUpdate: literal("compaction_summary_chunk")
   })),
+  zPromptSuggestionsUpdate.and(object({
+    sessionUpdate: literal("prompt_suggestions_update")
+  })),
+  zCursorUpdate.and(object({
+    sessionUpdate: literal("cursor_update")
+  })),
   zSubagentUpdate.and(object({
     sessionUpdate: literal("subagent_update")
   })),
@@ -7574,10 +8873,28 @@ var zSessionConfigOptionsCapabilities = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zNoticeCapabilities = record(string2(), unknown());
+var zPromptSuggestionsImageCapabilities = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPromptSuggestionsAudioCapabilities = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPromptSuggestionsEmbeddedContextCapabilities = object({
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zPromptSuggestionsCapabilities = object({
+  image: defaultOnError(zPromptSuggestionsImageCapabilities.nullish(), () => void 0),
+  audio: defaultOnError(zPromptSuggestionsAudioCapabilities.nullish(), () => void 0),
+  embeddedContext: defaultOnError(zPromptSuggestionsEmbeddedContextCapabilities.nullish(), () => void 0),
+  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
+});
+var zSessionCursorsCapabilities = record(string2(), unknown());
 var zClientSessionCapabilities = object({
   compaction: defaultOnError(zCompactionCapabilities.nullish(), () => void 0),
   configOptions: defaultOnError(zSessionConfigOptionsCapabilities.nullish(), () => void 0),
   notices: defaultOnError(zNoticeCapabilities.nullish(), () => void 0),
+  promptSuggestions: defaultOnError(zPromptSuggestionsCapabilities.nullish(), () => void 0),
+  cursors: defaultOnError(zSessionCursorsCapabilities.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zSubagentCapabilities = object({
@@ -7747,10 +9064,12 @@ var zDeleteSessionRequest = object({
 });
 var zForkSessionRequest = object({
   sessionId: zSessionId,
+  cursorId: zCursorId.nullish(),
   cwd: string2(),
   additionalDirectories: defaultOnNull(array(string2()), () => []).optional(),
   mcpServers: defaultOnNull(array(zMcpServer), () => []).optional(),
   systemPrompt: zSystemPrompt.nullish(),
+  configOptions: defaultOnNull(array(zInitialSessionConfigOption), () => []).optional(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zArchiveSessionRequest = object({
@@ -8013,1166 +9332,7 @@ var zProxyNotification = object({
   params: zProxySuccessorNotification.nullish()
 });
 
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/jsonrpc.js
-var CANCEL_REQUEST_METHOD = "$/cancel_request";
-function treatSessionNotFoundAsSuccess(method, response, success) {
-  if (method !== "session/close" && method !== "session/delete") {
-    return response;
-  }
-  return response.catch((error2) => {
-    if (error2 instanceof RequestError && error2.code === -32002) {
-      return success();
-    }
-    throw error2;
-  });
-}
-function isRequestMessage(value) {
-  return isJsonRpcEnvelope(value) && "id" in value && typeof value["method"] === "string" && isJsonRpcId(value["id"]);
-}
-function isResponseMessage(value) {
-  if (!isJsonRpcEnvelope(value) || "method" in value) {
-    return false;
-  }
-  if (!("id" in value) || !isJsonRpcId(value["id"])) {
-    return false;
-  }
-  const hasResult = Object.hasOwn(value, "result");
-  const hasError = Object.hasOwn(value, "error");
-  if (hasResult === hasError) {
-    return false;
-  }
-  return !hasError || isErrorResponse(value["error"]);
-}
-function isNotificationMessage(value) {
-  return isJsonRpcEnvelope(value) && !("id" in value) && typeof value["method"] === "string";
-}
-function isRecord(value) {
-  return typeof value === "object" && value !== null;
-}
-function isJsonRpcEnvelope(value) {
-  return isRecord(value) && value["jsonrpc"] === "2.0";
-}
-function isJsonRpcId(value) {
-  return value === null || typeof value === "string" || typeof value === "number" && Number.isFinite(value);
-}
-function isResponseShapedMessage(value) {
-  return isRecord(value) && !("method" in value) && ("id" in value || "result" in value || "error" in value);
-}
-function cancelRequestId(params) {
-  if (!isRecord(params) || !isJsonRpcId(params["requestId"])) {
-    return void 0;
-  }
-  return params["requestId"];
-}
-function isErrorResponse(value) {
-  return isRecord(value) && typeof value["code"] === "number" && Number.isInteger(value["code"]) && typeof value["message"] === "string";
-}
-var Handled = {
-  /**
-   * Marks a message as handled.
-   */
-  yes() {
-    return { handled: true };
-  },
-  /**
-   * Leaves a message unhandled so later handlers can process it.
-   */
-  no(message, retry = false) {
-    return { handled: false, message, retry };
-  }
-};
-function rejectedPromise(error2) {
-  const promise = Promise.reject(error2);
-  promise.catch(() => {
-  });
-  return promise;
-}
-function errorDetails(error2) {
-  if (error2 instanceof Error) {
-    return error2.message;
-  }
-  if (typeof error2 === "object" && error2 != null && "message" in error2 && typeof error2.message === "string") {
-    return error2.message;
-  }
-  return void 0;
-}
-function isZodError(error2) {
-  return typeof error2 === "object" && error2 !== null && "name" in error2 && error2.name === "ZodError" && "issues" in error2 && Array.isArray(error2.issues) && "format" in error2 && typeof error2.format === "function";
-}
-function describeInvalidMessage(message) {
-  if (Array.isArray(message)) {
-    return { type: "array" };
-  }
-  if (isRecord(message)) {
-    return { type: "object", keys: Object.keys(message) };
-  }
-  return { type: message === null ? "null" : typeof message };
-}
-function errorToResult(error2) {
-  if (error2 instanceof RequestError) {
-    return error2.toResult();
-  }
-  if (isZodError(error2)) {
-    return RequestError.invalidParams(error2.format()).toResult();
-  }
-  const details = errorDetails(error2);
-  try {
-    return RequestError.internalError(details ? JSON.parse(details) : {}).toResult();
-  } catch {
-    return RequestError.internalError({ details }).toResult();
-  }
-}
-function requestCancelledError(reason2) {
-  if (reason2 instanceof RequestError && reason2.code === -32800) {
-    return reason2;
-  }
-  return RequestError.requestCancelled(reason2);
-}
-function errorToRequestResult(error2, signal) {
-  const requestCancelled = abortErrorToRequestCancelled(error2, signal);
-  return requestCancelled ? requestCancelled.toResult() : errorToResult(error2);
-}
-function abortErrorToRequestCancelled(error2, signal) {
-  if (!signal.aborted || !isAbortError(error2)) {
-    return void 0;
-  }
-  return requestCancelledError(signal.reason);
-}
-function isAbortError(error2) {
-  if (typeof error2 !== "object" || error2 === null) {
-    return false;
-  }
-  const maybeAbortError = error2;
-  return maybeAbortError.name === "AbortError" || maybeAbortError.code === "ABORT_ERR";
-}
-var RequestResponder = class {
-  id;
-  sendResult;
-  signal;
-  finishRequest;
-  didRespond = false;
-  constructor(id, sendResult, signal = new AbortController().signal, finishRequest) {
-    this.id = id;
-    this.sendResult = sendResult;
-    this.signal = signal;
-    this.finishRequest = finishRequest;
-  }
-  /**
-   * Whether this request has already received a response.
-   */
-  get responded() {
-    return this.didRespond;
-  }
-  /**
-   * Sends a successful JSON-RPC response.
-   */
-  respond(response) {
-    return this.respondWithResult({ result: response ?? null });
-  }
-  /**
-   * Sends an error JSON-RPC response.
-   */
-  respondWithError(error2) {
-    const errorResponse = error2 instanceof RequestError ? error2.toErrorResponse() : error2;
-    return this.respondWithResult({ error: errorResponse });
-  }
-  /**
-   * Sends a complete JSON-RPC result payload.
-   */
-  respondWithResult(result2) {
-    if (this.didRespond) {
-      return rejectedPromise(new Error("JSON-RPC request already responded"));
-    }
-    this.didRespond = true;
-    return this.sendResult(result2).finally(() => {
-      this.finishRequest?.();
-    });
-  }
-};
-var nullIdResponders = /* @__PURE__ */ new WeakSet();
-var HandlerRegistration = class {
-  disposeHandler;
-  active = true;
-  constructor(disposeHandler) {
-    this.disposeHandler = disposeHandler;
-  }
-  /**
-   * Unregisters the associated handler.
-   */
-  dispose() {
-    if (!this.active) {
-      return;
-    }
-    this.active = false;
-    this.disposeHandler();
-  }
-  /**
-   * Supports explicit resource management with `using`.
-   */
-  [Symbol.dispose]() {
-    this.dispose();
-  }
-  /**
-   * Returns this registration for call sites that intentionally keep it active.
-   */
-  runIndefinitely() {
-    return this;
-  }
-};
-var ConnectionContext = class {
-  connection;
-  constructor(connection) {
-    this.connection = connection;
-  }
-  /**
-   * Sends a request over the connection.
-   */
-  sendRequest(method, params, mapResponse, options) {
-    return this.connection.sendRequest(method, params, mapResponse, options);
-  }
-  /**
-   * Sends a notification over the connection.
-   */
-  sendNotification(method, params) {
-    return this.connection.sendNotification(method, params);
-  }
-  /**
-   * Sends a protocol-level request cancellation notification.
-   */
-  sendCancelRequest(requestId) {
-    return this.connection.sendCancelRequest(requestId);
-  }
-  /**
-   * Registers a handler that can be disposed independently.
-   */
-  addDynamicHandler(handler) {
-    return this.connection.addDynamicHandler(handler);
-  }
-  /**
-   * AbortSignal that aborts when the connection closes.
-   */
-  get signal() {
-    return this.connection.signal;
-  }
-  /**
-   * Promise that resolves when the connection closes.
-   */
-  get closed() {
-    return this.connection.closed;
-  }
-};
-var Connection = class {
-  pendingResponses = /* @__PURE__ */ new Map();
-  incomingRequests = /* @__PURE__ */ new Map();
-  nextRequestId = 0;
-  staticHandlers = [];
-  dynamicHandlers = /* @__PURE__ */ new Set();
-  fallbackHandlers = [];
-  stream;
-  writeQueue = Promise.resolve();
-  abortController = new AbortController();
-  closedPromise;
-  retryQueue = [];
-  context = new ConnectionContext(this);
-  receiveReader;
-  constructor(requestHandlerOrStream, notificationHandlerOrHandlers, streamOrOptions, options) {
-    if (typeof requestHandlerOrStream === "function") {
-      const requestHandler = requestHandlerOrStream;
-      const notificationHandler = notificationHandlerOrHandlers;
-      const stream3 = streamOrOptions;
-      this.initialize(stream3, [
-        ...options?.handlers ?? [],
-        this.legacyHandler(requestHandler, notificationHandler)
-      ], options);
-      return;
-    }
-    const stream2 = requestHandlerOrStream;
-    const handlers = notificationHandlerOrHandlers;
-    const connectionOptions = streamOrOptions;
-    this.initialize(stream2, [...connectionOptions?.handlers ?? [], ...handlers], connectionOptions);
-  }
-  /**
-   * Creates a builder for configuring a handler-based connection.
-   */
-  static builder() {
-    return new ConnectionBuilder();
-  }
-  /**
-   * Runs an operation while the connection is open, then closes the connection.
-   *
-   * If the stream closes before `op` settles, the returned promise rejects with
-   * the connection close reason.
-   */
-  runUntil(op) {
-    let opSettled = false;
-    const opPromise = Promise.resolve().then(() => op(this.context)).finally(() => {
-      opSettled = true;
-    });
-    const closedPromise = this.closed.then(() => {
-      if (opSettled) {
-        return new Promise(() => {
-        });
-      }
-      throw this.closedReason();
-    });
-    return Promise.race([opPromise, closedPromise]).finally(() => {
-      opSettled = true;
-      this.close();
-    });
-  }
-  /**
-   * Adds a handler after the connection has started.
-   *
-   * Any messages queued with `Handled.no(message, true)` are retried after the
-   * handler is added.
-   */
-  addDynamicHandler(handler) {
-    this.dynamicHandlers.add(handler);
-    if (this.retryQueue.length > 0) {
-      for (const message of this.retryQueue.splice(0)) {
-        void this.processIncomingMessage(message).catch((error2) => this.close(error2));
-      }
-    }
-    return new HandlerRegistration(() => {
-      this.dynamicHandlers.delete(handler);
-    });
-  }
-  /**
-   * AbortSignal that aborts when the connection closes.
-   */
-  get signal() {
-    return this.abortController.signal;
-  }
-  /**
-   * Promise that resolves when the connection closes.
-   */
-  get closed() {
-    return this.closedPromise;
-  }
-  /** @internal */
-  getContext() {
-    return this.context;
-  }
-  /**
-   * Sends a JSON-RPC request.
-   *
-   * `mapResponse` can convert the raw result before the returned promise
-   * resolves.
-   */
-  sendRequest(method, params, mapResponse, options = {}) {
-    if (this.abortController.signal.aborted) {
-      return rejectedPromise(this.closedReason());
-    }
-    const request = this.prepareRequest(method, params, mapResponse, options);
-    const requestSent = this.sendMessage(request.message);
-    void requestSent.catch(() => {
-    });
-    if (options.cancellationSignal?.aborted) {
-      request.cancel();
-    }
-    return request.response;
-  }
-  /**
-   * Sends a protocol-level request cancellation notification.
-   */
-  sendCancelRequest(requestId) {
-    return this.sendNotification(CANCEL_REQUEST_METHOD, { requestId });
-  }
-  /**
-   * Sends a JSON-RPC notification.
-   */
-  sendNotification(method, params) {
-    if (this.abortController.signal.aborted) {
-      return rejectedPromise(this.closedReason());
-    }
-    return this.sendMessage({ jsonrpc: "2.0", method, params });
-  }
-  prepareRequest(method, params, mapResponse, options = {}) {
-    const id = this.nextRequestId++;
-    let cancel2 = () => {
-    };
-    const response = new Promise((resolve, reject) => {
-      const pendingResponse = {
-        resolve: (value) => {
-          try {
-            resolve(mapResponse ? mapResponse(value) : value);
-          } catch (error2) {
-            reject(error2);
-          }
-        },
-        reject
-      };
-      cancel2 = () => {
-        if (pendingResponse.cancellationSent) {
-          return;
-        }
-        pendingResponse.cancellationSent = true;
-        pendingResponse.cleanup?.();
-        void this.sendCancelRequest(id).catch(() => {
-        });
-        if (options.stopWaitingOnCancel) {
-          pendingResponse.abandoned = true;
-          reject(requestCancelledError(options.cancellationSignal?.reason));
-        }
-      };
-      options.cancellationSignal?.addEventListener("abort", cancel2, {
-        once: true
-      });
-      pendingResponse.cleanup = () => {
-        options.cancellationSignal?.removeEventListener("abort", cancel2);
-      };
-      this.pendingResponses.set(id, pendingResponse);
-    });
-    response.catch(() => {
-    });
-    return {
-      message: { jsonrpc: "2.0", id, method, params },
-      response,
-      cancel: () => cancel2()
-    };
-  }
-  /**
-   * Closes the connection and rejects pending requests.
-   */
-  close(error2) {
-    if (this.abortController.signal.aborted) {
-      return;
-    }
-    const closeError = error2 ?? new Error("ACP connection closed");
-    this.abortController.abort(closeError);
-    for (const pendingResponse of this.pendingResponses.values()) {
-      pendingResponse.cleanup?.();
-      pendingResponse.reject(closeError);
-    }
-    this.pendingResponses.clear();
-    for (const controller of this.incomingRequests.values()) {
-      controller.abort(closeError);
-    }
-    this.incomingRequests.clear();
-    void this.receiveReader?.cancel(closeError).catch(() => {
-    });
-  }
-  initialize(stream2, handlers, options) {
-    this.stream = stream2;
-    this.staticHandlers = handlers;
-    this.fallbackHandlers = [...options?.fallbackHandlers ?? []];
-    this.closedPromise = new Promise((resolve) => {
-      this.abortController.signal.addEventListener("abort", () => resolve());
-    });
-    void this.receive();
-  }
-  legacyHandler(requestHandler, notificationHandler) {
-    return {
-      handleMessage: async (message, cx) => {
-        if (message.kind === "request") {
-          const result2 = await requestHandler(message.method, message.params, cx);
-          await message.responder.respond(result2);
-        } else {
-          await notificationHandler(message.method, message.params, cx);
-        }
-        return Handled.yes();
-      }
-    };
-  }
-  async receive() {
-    let closeError = void 0;
-    try {
-      const reader = this.stream.readable.getReader();
-      this.receiveReader = reader;
-      try {
-        while (!this.abortController.signal.aborted) {
-          const { value: message, done } = await reader.read();
-          if (this.abortController.signal.aborted) {
-            break;
-          }
-          if (done) {
-            break;
-          }
-          this.receiveUnvalidatedMessage(message);
-        }
-      } finally {
-        if (this.receiveReader === reader) {
-          this.receiveReader = void 0;
-        }
-        reader.releaseLock();
-      }
-    } catch (error2) {
-      closeError = error2;
-    } finally {
-      this.close(closeError);
-    }
-  }
-  receiveUnvalidatedMessage(message) {
-    if (Array.isArray(message)) {
-      void this.sendMessage(protocolErrorResponse(RequestError.invalidRequest(void 0, "JSON-RPC batches are not supported"))).catch(() => {
-      });
-      return;
-    }
-    if (!isRequestMessage(message) && !isNotificationMessage(message) && !isResponseShapedMessage(message)) {
-      void this.sendMessage(protocolErrorResponse(RequestError.invalidRequest(message))).catch(() => {
-      });
-      return;
-    }
-    this.receiveMessage(message);
-  }
-  receiveMessage(message) {
-    if (this.abortController.signal.aborted) {
-      return Promise.resolve();
-    }
-    if (!isRecord(message)) {
-      console.error("Invalid message", describeInvalidMessage(message));
-      return Promise.resolve();
-    }
-    if ("method" in message) {
-      if (!("id" in message)) {
-        this.handleProtocolNotification(message);
-      }
-      return this.processIncomingMessage(this.toIncomingMessage(message)).catch((error2) => this.close(error2));
-    } else if ("id" in message) {
-      this.handleResponse(message);
-    } else {
-      console.error("Invalid message", describeInvalidMessage(message));
-    }
-    return Promise.resolve();
-  }
-  async processIncomingMessage(message) {
-    if (this.abortController.signal.aborted) {
-      return;
-    }
-    let current = message;
-    let retry = false;
-    try {
-      for (const handler of [
-        ...this.staticHandlers,
-        ...this.dynamicHandlers.values(),
-        ...this.fallbackHandlers
-      ]) {
-        if (this.abortController.signal.aborted) {
-          return;
-        }
-        const result2 = await handler.handleMessage(current, this.context) ?? {
-          handled: true
-        };
-        if (result2.handled) {
-          return;
-        }
-        current = result2.message ?? current;
-        retry = retry || Boolean(result2.retry);
-      }
-      if (retry) {
-        this.retryQueue.push(current);
-      } else if (current.kind === "request") {
-        await current.responder.respondWithError(RequestError.methodNotFound(current.method));
-      }
-    } catch (error2) {
-      if (this.abortController.signal.aborted) {
-        return;
-      }
-      if (current.kind === "request" && !current.responder.responded) {
-        await current.responder.respondWithResult(errorToRequestResult(error2, current.responder.signal));
-      } else {
-        const response = errorToResult(error2);
-        if ("error" in response) {
-          console.error("Error handling notification", {
-            method: message.method,
-            code: response.error.code,
-            message: response.error.message
-          });
-        }
-      }
-    }
-  }
-  toIncomingMessage(message) {
-    if ("id" in message) {
-      const abortController = new AbortController();
-      this.incomingRequests.set(message.id, abortController);
-      const finishRequest = () => {
-        if (this.incomingRequests.get(message.id) === abortController) {
-          this.incomingRequests.delete(message.id);
-        }
-      };
-      const responder = new RequestResponder(message.id, (result2) => {
-        const response = {
-          jsonrpc: "2.0",
-          id: nullIdResponders.has(responder) ? null : message.id,
-          ...result2
-        };
-        return this.sendMessage(response);
-      }, abortController.signal, finishRequest);
-      return {
-        kind: "request",
-        method: message.method,
-        params: message.params,
-        raw: message,
-        signal: abortController.signal,
-        responder
-      };
-    }
-    return {
-      kind: "notification",
-      method: message.method,
-      params: message.params,
-      raw: message
-    };
-  }
-  handleResponse(response) {
-    const pendingResponse = this.pendingResponses.get(response.id);
-    if (pendingResponse) {
-      this.pendingResponses.delete(response.id);
-      pendingResponse.cleanup?.();
-      if (pendingResponse.abandoned) {
-        return;
-      }
-      if (!isResponseMessage(response)) {
-        pendingResponse.reject(RequestError.invalidRequest(response));
-      } else if ("result" in response) {
-        pendingResponse.resolve(response.result);
-      } else {
-        const { code, message, data } = response.error;
-        pendingResponse.reject(new RequestError(code, message, data));
-      }
-    } else {
-      console.error("Got response to unknown request", response.id);
-    }
-  }
-  handleProtocolNotification(message) {
-    if (message.method !== CANCEL_REQUEST_METHOD) {
-      return;
-    }
-    const requestId = cancelRequestId(message.params);
-    if (requestId === void 0) {
-      return;
-    }
-    const controller = this.incomingRequests.get(requestId);
-    if (!controller || controller.signal.aborted) {
-      return;
-    }
-    controller.abort(RequestError.requestCancelled({ requestId }));
-  }
-  closedReason() {
-    return this.abortController.signal.reason ?? new Error("ACP connection closed");
-  }
-  async sendMessage(message) {
-    if (this.abortController.signal.aborted) {
-      return rejectedPromise(this.closedReason());
-    }
-    this.writeQueue = this.writeQueue.then(async () => {
-      if (this.abortController.signal.aborted) {
-        throw this.closedReason();
-      }
-      const writer = this.stream.writable.getWriter();
-      try {
-        await writer.write(message);
-      } finally {
-        writer.releaseLock();
-      }
-    }).catch((error2) => {
-      this.close(error2);
-      throw error2;
-    });
-    return this.writeQueue;
-  }
-};
-var ConnectionBuilder = class {
-  handlers = [];
-  fallbackHandlers = [];
-  connectionName;
-  /**
-   * Sets a diagnostic name used by handlers created from this builder.
-   */
-  name(name) {
-    this.connectionName = name;
-    return this;
-  }
-  /**
-   * Adds a raw JSON-RPC handler to the handler chain.
-   */
-  withHandler(handler) {
-    this.handlers.push(handler);
-    return this;
-  }
-  /**
-   * Adds a fallback after static and dynamic handlers. Each connection snapshots
-   * this registration alongside the builder's other handlers.
-   */
-  withFallbackHandler(handler) {
-    this.fallbackHandlers.push(handler);
-    return this;
-  }
-  /**
-   * Adds a handler that can inspect every incoming request or notification.
-   *
-   * Observer callbacks that return void pass the message through to later
-   * handlers. Return `Handled.yes()` to stop dispatch explicitly.
-   */
-  onReceiveMessage(handler) {
-    return this.withHandler({
-      handleMessage: async (message, cx) => await handler(message, cx) ?? Handled.no(message),
-      describe: () => this.connectionName ?? "onReceiveMessage"
-    });
-  }
-  /**
-   * Adds a typed request handler for one method.
-   */
-  onReceiveRequest(method, parse2, handler) {
-    return this.withHandler({
-      handleMessage: async (message, cx) => {
-        if (message.kind !== "request" || message.method !== method) {
-          return Handled.no(message);
-        }
-        const request = parse2(message.params);
-        return await handler(request, message.responder, cx) ?? Handled.yes();
-      },
-      describe: () => `${this.connectionName ?? "request"}:${method}`
-    });
-  }
-  /**
-   * Adds a typed notification handler for one method.
-   */
-  onReceiveNotification(method, parse2, handler) {
-    return this.withHandler({
-      handleMessage: async (message, cx) => {
-        if (message.kind !== "notification" || message.method !== method) {
-          return Handled.no(message);
-        }
-        const notification = parse2(message.params);
-        return await handler(notification, cx) ?? Handled.yes();
-      },
-      describe: () => `${this.connectionName ?? "notification"}:${method}`
-    });
-  }
-  /**
-   * Connects the configured handlers to a stream.
-   */
-  connect(stream2, options) {
-    return new Connection(stream2, this.handlers, {
-      ...options,
-      fallbackHandlers: [
-        ...options?.fallbackHandlers ?? [],
-        ...this.fallbackHandlers
-      ]
-    });
-  }
-  /**
-   * Connects to a stream for the lifetime of `op`, then closes the connection.
-   */
-  connectWith(stream2, op, options) {
-    return this.connect(stream2, options).runUntil(op);
-  }
-};
-var RequestError = class _RequestError extends Error {
-  code;
-  /**
-   * Additional JSON-RPC error data.
-   */
-  data;
-  constructor(code, message, data) {
-    super(message);
-    this.code = code;
-    this.name = "RequestError";
-    this.data = data;
-  }
-  /**
-   * Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.
-   */
-  static parseError(data, additionalMessage) {
-    return new _RequestError(-32700, `Parse error${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
-  }
-  /**
-   * The JSON sent is not a valid Request object.
-   */
-  static invalidRequest(data, additionalMessage) {
-    return new _RequestError(-32600, `Invalid request${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
-  }
-  /**
-   * The method does not exist / is not available.
-   */
-  static methodNotFound(method) {
-    return new _RequestError(-32601, `"Method not found": ${method}`, {
-      method
-    });
-  }
-  /**
-   * Invalid method parameter(s).
-   */
-  static invalidParams(data, additionalMessage) {
-    return new _RequestError(-32602, `Invalid params${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
-  }
-  /**
-   * Internal JSON-RPC error.
-   */
-  static internalError(data, additionalMessage) {
-    return new _RequestError(-32603, `Internal error${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
-  }
-  /**
-   * Execution of the request was aborted.
-   */
-  static requestCancelled(data, additionalMessage) {
-    return new _RequestError(-32800, `Request cancelled${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
-  }
-  /**
-   * Authentication required.
-   */
-  static authRequired(data, additionalMessage) {
-    return new _RequestError(-32e3, `Authentication required${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
-  }
-  /**
-   * A referenced resource, such as a session or file, does not exist.
-   *
-   * For an unknown or inactive session, prefer
-   * {@link RequestError.sessionNotFound}, which sets `data.sessionId` as the
-   * protocol expects.
-   */
-  static resourceNotFound(uri) {
-    return new _RequestError(-32002, `Resource not found${uri ? `: ${uri}` : ""}`, uri && { uri });
-  }
-  /**
-   * The session named by a session-scoped request does not exist or is not
-   * active on this connection.
-   *
-   * Produces a `-32002` (Resource not found) error with `data.sessionId` set
-   * to the requested session ID.
-   */
-  static sessionNotFound(sessionId) {
-    return new _RequestError(-32002, "Resource not found", {
-      sessionId
-    });
-  }
-  /**
-   * No supported protocol version is at or below the requested version.
-   *
-   * Produces a `-32022` error whose data lists the `requested` version and the
-   * `supported` versions.
-   */
-  static unsupportedProtocolVersion(requested, supported) {
-    return new _RequestError(-32022, "Unsupported protocol version", {
-      requested,
-      supported: [...supported]
-    });
-  }
-  /**
-   * Converts this error to a JSON-RPC result object.
-   */
-  toResult() {
-    return {
-      error: {
-        code: this.code,
-        message: this.message,
-        data: this.data
-      }
-    };
-  }
-  /**
-   * Converts this error to a JSON-RPC error response payload.
-   */
-  toErrorResponse() {
-    return {
-      code: this.code,
-      message: this.message,
-      data: this.data
-    };
-  }
-};
-function protocolErrorResponse(error2) {
-  return {
-    jsonrpc: "2.0",
-    id: null,
-    error: error2.toErrorResponse()
-  };
-}
-
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/stream-limits.js
-var DEFAULT_MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
-var MessageTooLargeError = class extends Error {
-  maxMessageBytes;
-  constructor(maxMessageBytes) {
-    super(`Incoming ACP data exceeds the configured ${maxMessageBytes} byte limit`);
-    this.maxMessageBytes = maxMessageBytes;
-    this.name = "MessageTooLargeError";
-  }
-};
-function resolveMaxMessageBytes(value) {
-  const maxMessageBytes = value ?? DEFAULT_MAX_MESSAGE_BYTES;
-  if (!Number.isSafeInteger(maxMessageBytes) || maxMessageBytes <= 0) {
-    throw new RangeError("maxMessageBytes must be a positive safe integer");
-  }
-  return maxMessageBytes;
-}
-var MessageBuffer = class {
-  #buffer = new Uint8Array(0);
-  #length = 0;
-  #maxMessageBytes;
-  constructor(maxMessageBytes) {
-    this.#maxMessageBytes = resolveMaxMessageBytes(maxMessageBytes);
-  }
-  get byteLength() {
-    return this.#length;
-  }
-  get lastByte() {
-    return this.#buffer[this.#length - 1];
-  }
-  #checkAppend(byteLength) {
-    if (byteLength > this.#maxMessageBytes - this.#length) {
-      this.clear();
-      throw new MessageTooLargeError(this.#maxMessageBytes);
-    }
-  }
-  append(bytes) {
-    this.#checkAppend(bytes.byteLength);
-    const length = this.#length + bytes.byteLength;
-    if (length > this.#buffer.byteLength) {
-      const capacity = Math.min(this.#maxMessageBytes, Math.max(length, this.#buffer.byteLength * 2, 1024));
-      const buffer = new Uint8Array(capacity);
-      buffer.set(this.#buffer.subarray(0, this.#length));
-      this.#buffer = buffer;
-    }
-    this.#buffer.set(bytes, this.#length);
-    this.#length = length;
-  }
-  take() {
-    const bytes = this.#buffer.subarray(0, this.#length);
-    this.clear();
-    return bytes;
-  }
-  clear() {
-    this.#buffer = new Uint8Array(0);
-    this.#length = 0;
-  }
-};
-
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/line-buffer.js
-var newline = 10;
-var carriageReturn = 13;
-var LineBuffer = class {
-  /** Bytes of the current (incomplete) line, carried across chunks. */
-  #pending;
-  #maxMessageBytes;
-  #splitOnCarriageReturn;
-  /** Whether the last line ended at a CR whose LF may start the next chunk. */
-  #afterCarriageReturn = false;
-  constructor(maxMessageBytes, { splitOnCarriageReturn = false } = {}) {
-    this.#maxMessageBytes = resolveMaxMessageBytes(maxMessageBytes);
-    this.#pending = new MessageBuffer(Math.min(Number.MAX_SAFE_INTEGER, this.#maxMessageBytes + 1));
-    this.#splitOnCarriageReturn = splitOnCarriageReturn;
-  }
-  /**
-   * Consumes a chunk, yielding each complete line without its line ending.
-   */
-  *push(chunk) {
-    let start = 0;
-    if (this.#afterCarriageReturn && chunk.byteLength > 0) {
-      this.#afterCarriageReturn = false;
-      if (chunk[0] === newline) {
-        start = 1;
-      }
-    }
-    let newlineIndex = chunk.indexOf(newline, start);
-    let carriageReturnIndex = this.#splitOnCarriageReturn ? chunk.indexOf(carriageReturn, start) : -1;
-    while (newlineIndex !== -1 || carriageReturnIndex !== -1) {
-      if (carriageReturnIndex === -1 || newlineIndex !== -1 && newlineIndex < carriageReturnIndex) {
-        yield this.#takeLine(chunk.subarray(start, newlineIndex));
-        start = newlineIndex + 1;
-        newlineIndex = chunk.indexOf(newline, start);
-      } else {
-        yield this.#takeLine(chunk.subarray(start, carriageReturnIndex));
-        start = carriageReturnIndex + 1;
-        if (start === chunk.byteLength) {
-          this.#afterCarriageReturn = true;
-        } else if (chunk[start] === newline) {
-          start++;
-          newlineIndex = chunk.indexOf(newline, start);
-        }
-        carriageReturnIndex = chunk.indexOf(carriageReturn, start);
-      }
-    }
-    if (start < chunk.byteLength) {
-      const tail = chunk.subarray(start);
-      this.#checkLine(tail);
-      this.#pending.append(tail);
-    }
-  }
-  /**
-   * Returns the trailing unterminated line and resets the buffer, or
-   * undefined if no bytes are buffered.
-   */
-  flush() {
-    this.#afterCarriageReturn = false;
-    if (this.#pending.byteLength === 0) {
-      return void 0;
-    }
-    return stripCarriageReturn(this.#pending.take());
-  }
-  clear() {
-    this.#afterCarriageReturn = false;
-    this.#pending.clear();
-  }
-  #takeLine(tail) {
-    this.#checkLine(tail);
-    if (this.#pending.byteLength === 0) {
-      return stripCarriageReturn(tail);
-    }
-    this.#pending.append(tail);
-    return stripCarriageReturn(this.#pending.take());
-  }
-  #checkLine(tail) {
-    const lastByte = tail.byteLength > 0 ? tail[tail.byteLength - 1] : this.#pending.lastByte;
-    const byteLength = this.#pending.byteLength + tail.byteLength - (lastByte === carriageReturn ? 1 : 0);
-    if (byteLength > this.#maxMessageBytes) {
-      this.clear();
-      throw new MessageTooLargeError(this.#maxMessageBytes);
-    }
-  }
-};
-function stripCarriageReturn(line) {
-  return line[line.byteLength - 1] === carriageReturn ? line.subarray(0, -1) : line;
-}
-
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/stream.js
-function ndJsonStream(output, input, options = {}) {
-  const maxMessageBytes = resolveMaxMessageBytes(options.maxMessageBytes);
-  const textEncoder = new TextEncoder();
-  const textDecoder = new TextDecoder();
-  let cancelled = false;
-  let inputReader;
-  let outputWrite = Promise.resolve();
-  const writeJson = (message) => {
-    const content = JSON.stringify(message) + "\n";
-    const write = outputWrite.then(async () => {
-      const writer = output.getWriter();
-      try {
-        await writer.write(textEncoder.encode(content));
-      } finally {
-        writer.releaseLock();
-      }
-    });
-    outputWrite = write.catch(() => {
-    });
-    return write;
-  };
-  const readable = new ReadableStream({
-    async start(controller) {
-      const lines = new LineBuffer(maxMessageBytes);
-      const enqueueLine = async (lineBytes) => {
-        const trimmedLine = textDecoder.decode(lineBytes).trim();
-        if (!trimmedLine) {
-          return;
-        }
-        let message;
-        try {
-          message = JSON.parse(trimmedLine);
-        } catch {
-          await writeJson(protocolErrorResponse(RequestError.parseError()));
-          return;
-        }
-        if (Array.isArray(message)) {
-          await writeJson(protocolErrorResponse(RequestError.invalidRequest(void 0, "JSON-RPC batches are not supported")));
-        } else if (isRecord(message)) {
-          controller.enqueue(message);
-        } else {
-          await writeJson(protocolErrorResponse(RequestError.invalidRequest(message)));
-        }
-      };
-      const reader = input.getReader();
-      inputReader = reader;
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (cancelled) {
-            return;
-          }
-          if (done) {
-            break;
-          }
-          if (!value) {
-            continue;
-          }
-          for (const line of lines.push(value)) {
-            await enqueueLine(line);
-            if (cancelled) {
-              return;
-            }
-          }
-        }
-        if (cancelled) {
-          return;
-        }
-        const lastLine = lines.flush();
-        if (lastLine) {
-          await enqueueLine(lastLine);
-        }
-      } catch (err) {
-        if (cancelled) {
-          return;
-        }
-        controller.error(err);
-        void reader.cancel(err).catch(() => {
-        });
-        return;
-      } finally {
-        lines.clear();
-        if (inputReader === reader) {
-          inputReader = void 0;
-        }
-        reader.releaseLock();
-      }
-      if (cancelled) {
-        return;
-      }
-      controller.close();
-    },
-    cancel(reason2) {
-      cancelled = true;
-      return inputReader?.cancel(reason2);
-    }
-  });
-  const writable = new WritableStream({
-    write(message) {
-      return writeJson(message);
-    }
-  });
-  return { readable, writable };
-}
-
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/guards.gen.js
-var zGuardCreateElicitationRequestForm = zElicitationFormMode.and(object({ mode: literal("form") })).and(object({ message: string2() }));
-var zGuardCreateElicitationRequestUrl = zElicitationUrlMode.and(object({ mode: literal("url") })).and(object({ message: string2() }));
-var zGuardCreateElicitationRequestCustom = union([zElicitationSessionScope, zElicitationRequestScope]).and(object({ message: string2() }));
-var zGuardElicitationPropertySchemaString = zStringPropertySchema.and(object({ type: literal("string") }));
-var zGuardElicitationPropertySchemaNumber = zNumberPropertySchema.and(object({ type: literal("number") }));
-var zGuardElicitationPropertySchemaInteger = zIntegerPropertySchema.and(object({ type: literal("integer") }));
-var zGuardElicitationPropertySchemaBoolean = zBooleanPropertySchema.and(object({ type: literal("boolean") }));
-var zGuardElicitationPropertySchemaArray = zMultiSelectPropertySchema.and(object({ type: literal("array") }));
-var zGuardMultiSelectItemsString = zStringMultiSelectItems.and(object({ type: literal("string") }));
-var zGuardStateUpdateRunning = zRunningStateUpdate.and(object({ state: literal("running") }));
-var zGuardStateUpdateIdle = zIdleStateUpdate.and(object({ usage: zUsage.nullish() })).and(object({ state: literal("idle") }));
-var zGuardStateUpdateRequiresAction = zRequiresActionStateUpdate.and(object({ state: literal("requires_action") }));
-var zGuardStateUpdateUnknown = zUnknownStateUpdate.and(object({ state: literal("unknown") }));
-var zGuardIdleStateUpdateEndTurn = object({
-  stopReason: literal("end_turn")
-});
-var zGuardIdleStateUpdateMaxTokens = object({
-  stopReason: literal("max_tokens")
-});
-var zGuardIdleStateUpdateMaxTurnRequests = object({
-  stopReason: literal("max_turn_requests")
-});
-var zGuardIdleStateUpdateRefusal = object({
-  stopReason: literal("refusal")
-});
-var zGuardIdleStateUpdateCancelled = object({
-  stopReason: literal("cancelled")
-});
-var zGuardIdleStateUpdateError = zErrorStopReason.and(object({ error: zError.nullish() })).and(object({ stopReason: literal("error") }));
-var zGuardIdleStateUpdateNone = object({ stopReason: _null3().optional() });
-var zGuardCreateElicitationResponseAccept = zElicitationAcceptAction.and(object({ action: literal("accept") }));
-var zGuardCreateElicitationResponseDecline = object({
-  action: literal("decline")
-});
-var zGuardCreateElicitationResponseCancel = object({
-  action: literal("cancel")
-});
-
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/app-handlers.js
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/app-handlers.js
 function parseParams(parser, params) {
   if (!parser) {
     return params;
@@ -9222,13 +9382,10 @@ function registerAppNotification(builder, spec, context, handler) {
   }
 }
 
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/connection-access.js
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/connection-access.js
 var connectionContextOf = /* @__PURE__ */ Symbol("connectionContextOf");
 
-// node_modules/.pnpm/@agentclientprotocol+sdk@2.6.0_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/acp.js
-function ndJsonStream2(output, input, options) {
-  return ndJsonStream(output, input, options);
-}
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/bindings.js
 var initializedConnections = /* @__PURE__ */ new WeakSet();
 function agentInitializationGate(enabled) {
   return {
@@ -9273,72 +9430,6 @@ function memoryStreamPair() {
     }
   ];
 }
-var methods = {
-  agent: {
-    initialize: AGENT_METHODS.initialize,
-    authenticate: AGENT_METHODS.authenticate,
-    logout: AGENT_METHODS.logout,
-    auth: {
-      status: AGENT_METHODS.auth_status
-    },
-    providers: {
-      list: AGENT_METHODS.providers_list,
-      set: AGENT_METHODS.providers_set,
-      disable: AGENT_METHODS.providers_disable
-    },
-    session: {
-      new: AGENT_METHODS.session_new,
-      load: AGENT_METHODS.session_load,
-      list: AGENT_METHODS.session_list,
-      delete: AGENT_METHODS.session_delete,
-      fork: AGENT_METHODS.session_fork,
-      archive: AGENT_METHODS.session_archive,
-      unarchive: AGENT_METHODS.session_unarchive,
-      status: AGENT_METHODS.session_status,
-      options: AGENT_METHODS.session_options,
-      setTitle: AGENT_METHODS.session_set_title,
-      resume: AGENT_METHODS.session_resume,
-      close: AGENT_METHODS.session_close,
-      setMode: AGENT_METHODS.session_set_mode,
-      setConfigOption: AGENT_METHODS.session_set_config_option,
-      prompt: AGENT_METHODS.session_prompt,
-      cancel: AGENT_METHODS.session_cancel
-    },
-    mcp: {
-      message: AGENT_METHODS.mcp_message
-    }
-  },
-  client: {
-    session: {
-      requestPermission: CLIENT_METHODS.session_request_permission,
-      update: CLIENT_METHODS.session_update
-    },
-    fs: {
-      writeTextFile: CLIENT_METHODS.fs_write_text_file,
-      readTextFile: CLIENT_METHODS.fs_read_text_file
-    },
-    terminal: {
-      create: CLIENT_METHODS.terminal_create,
-      output: CLIENT_METHODS.terminal_output,
-      release: CLIENT_METHODS.terminal_release,
-      waitForExit: CLIENT_METHODS.terminal_wait_for_exit,
-      kill: CLIENT_METHODS.terminal_kill
-    },
-    mcp: {
-      message: CLIENT_METHODS.mcp_message
-    },
-    elicitation: {
-      create: CLIENT_METHODS.elicitation_create,
-      complete: CLIENT_METHODS.elicitation_complete
-    },
-    auth: {
-      statusUpdate: CLIENT_METHODS.auth_status_update
-    }
-  },
-  protocol: {
-    cancelRequest: PROTOCOL_METHODS.cancel_request
-  }
-};
 var startActiveSession = /* @__PURE__ */ Symbol("startActiveSession");
 var AcpContext = class {
   cx;
@@ -9802,7 +9893,7 @@ var agentRequestSpecs = {
   unstable_setProvider: requestSpec(AGENT_METHODS.providers_set, zSetProviderRequest, emptyObjectResponse),
   unstable_disableProvider: requestSpec(AGENT_METHODS.providers_disable, zDisableProviderRequest, emptyObjectResponse),
   logout: requestSpec(AGENT_METHODS.logout, zLogoutRequest, emptyObjectResponse),
-  unstable_authStatus: requestSpec(AGENT_METHODS.auth_status, zAuthStatusRequest),
+  unstable_authStatus: requestSpec(AGENT_METHODS.auth_status, zAuthStatusRequest, (response) => zAuthStatusResponse.parse(response)),
   prompt: requestSpec(AGENT_METHODS.session_prompt, zPromptRequest)
 };
 var agentNotificationSpecs = {
@@ -10037,8 +10128,8 @@ var AgentApp = class {
     const peerRawConnection = target[appBuilder]().connect(peerStream);
     const peerConnection = clientConnection(peerRawConnection);
     const state = this.openStreamConnection(thisStream);
-    void state.rawConnection.closed.then(() => peerConnection.close());
-    void peerRawConnection.closed.then(() => state.connection.close());
+    void state.rawConnection.closed.then(() => peerRawConnection.closeFromPeer());
+    void peerRawConnection.closed.then(() => state.rawConnection.closeFromPeer());
     try {
       target[runClientConnectHandlers](peerConnection);
       this[runAgentConnectHandlers](state.connection);
@@ -10158,8 +10249,8 @@ var ClientApp = class {
     const peerRawConnection = target[appBuilder]().connect(peerStream);
     const peerConnection = agentConnection(peerRawConnection);
     const state = this.openStreamConnection(thisStream);
-    void state.rawConnection.closed.then(() => peerConnection.close());
-    void peerRawConnection.closed.then(() => state.connection.close());
+    void state.rawConnection.closed.then(() => peerRawConnection.closeFromPeer());
+    void peerRawConnection.closed.then(() => state.rawConnection.closeFromPeer());
     try {
       target[runAgentConnectHandlers](peerConnection);
       this[runClientConnectHandlers](state.connection);
@@ -10253,6 +10344,79 @@ var TerminalHandle = class _TerminalHandle {
     await this.release();
   }
 };
+
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/methods.js
+var methods = {
+  agent: {
+    initialize: AGENT_METHODS.initialize,
+    authenticate: AGENT_METHODS.authenticate,
+    logout: AGENT_METHODS.logout,
+    auth: {
+      status: AGENT_METHODS.auth_status
+    },
+    providers: {
+      list: AGENT_METHODS.providers_list,
+      set: AGENT_METHODS.providers_set,
+      disable: AGENT_METHODS.providers_disable
+    },
+    session: {
+      new: AGENT_METHODS.session_new,
+      load: AGENT_METHODS.session_load,
+      list: AGENT_METHODS.session_list,
+      delete: AGENT_METHODS.session_delete,
+      fork: AGENT_METHODS.session_fork,
+      archive: AGENT_METHODS.session_archive,
+      unarchive: AGENT_METHODS.session_unarchive,
+      status: AGENT_METHODS.session_status,
+      options: AGENT_METHODS.session_options,
+      setTitle: AGENT_METHODS.session_set_title,
+      resume: AGENT_METHODS.session_resume,
+      close: AGENT_METHODS.session_close,
+      setMode: AGENT_METHODS.session_set_mode,
+      setConfigOption: AGENT_METHODS.session_set_config_option,
+      prompt: AGENT_METHODS.session_prompt,
+      cancel: AGENT_METHODS.session_cancel
+    },
+    mcp: {
+      message: AGENT_METHODS.mcp_message
+    }
+  },
+  client: {
+    session: {
+      requestPermission: CLIENT_METHODS.session_request_permission,
+      update: CLIENT_METHODS.session_update
+    },
+    fs: {
+      writeTextFile: CLIENT_METHODS.fs_write_text_file,
+      readTextFile: CLIENT_METHODS.fs_read_text_file
+    },
+    terminal: {
+      create: CLIENT_METHODS.terminal_create,
+      output: CLIENT_METHODS.terminal_output,
+      release: CLIENT_METHODS.terminal_release,
+      waitForExit: CLIENT_METHODS.terminal_wait_for_exit,
+      kill: CLIENT_METHODS.terminal_kill
+    },
+    mcp: {
+      message: CLIENT_METHODS.mcp_message
+    },
+    elicitation: {
+      create: CLIENT_METHODS.elicitation_create,
+      complete: CLIENT_METHODS.elicitation_complete
+    },
+    auth: {
+      statusUpdate: CLIENT_METHODS.auth_status_update
+    }
+  },
+  protocol: {
+    cancelRequest: PROTOCOL_METHODS.cancel_request
+  }
+};
+
+// node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/v1/acp.js
+function ndJsonStream2(output, input, options) {
+  return ndJsonStream(output, input, options);
+}
 
 // relay/src/relay.mts
 var out = (event) => process.stdout.write(`${JSON.stringify(event)}

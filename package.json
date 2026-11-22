@@ -14,9 +14,9 @@
     "eval": "claude plugin eval . --ablation none --model haiku --allow-real-servers --allow-tools SendMessage --max-cost-usd 0.5 --trust-plugin --no-publish"
   },
   "devDependencies": {
-    "@agentclientprotocol/sdk": "2.6.0",
+    "@agentclientprotocol/sdk": "2.9.1",
     "@biomejs/biome": "2.6.7",
-    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.6.0",
     "@types/node": "26.6.6",
     "esbuild": "0.28.2",
     "typescript": "7.0.2",
