@@ -169,8 +169,61 @@ function question(e: Record<string, unknown>): Question | undefined {
       : undefined
   }
   return e.mode === 'form' && isRecord(e.requestedSchema)
-    ? { id: e.id, message, mode: 'form', requestedSchema: shownSchema(e.requestedSchema) as Record<string, unknown> }
+    ? { id: e.id, mode: 'form', ...wholeQuestions(message, shownSchema(e.requestedSchema) as Record<string, unknown>) }
     : undefined
+}
+
+// Claude Code's form cuts a field's title at about 47 characters, and codex-acp puts each of Codex's questions in
+// its field's title. A title longer than LONG_TITLE goes first in the form's message instead, its field labelled.
+// The message shows MESSAGE_LINES lines, each cropped at the terminal's width (anthropics/claude-code#102766), so questions
+// are wrapped to fit 80 columns: the first long one always moves, one of up to about 220 characters shown whole;
+// a later one moves only while all still fit, or it would be hidden, and otherwise keeps its own cut title.
+const LONG_TITLE = 40
+const WRAP = 72
+const MESSAGE_LINES = 3
+
+function wrapped(text: string, indent: string): string[] {
+  const lines: string[] = []
+  let line = ''
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    if (line && line.length + 1 + word.length > WRAP - indent.length) {
+      lines.push(line)
+      line = word
+    } else line = line ? `${line} ${word}` : word
+  }
+  if (line) lines.push(line)
+  return lines
+}
+
+function wholeQuestions(message: string, schema: Record<string, unknown>) {
+  const properties = isRecord(schema.properties) ? schema.properties : {}
+  const long = Object.entries(properties).flatMap(([name, field]) =>
+    isRecord(field) && typeof field.title === 'string' && field.title.length > LONG_TITLE ? [[name, field.title] as const] : [],
+  )
+  if (long.length === 0) return { message, requestedSchema: schema }
+  const moved: (typeof long)[number][] = []
+  let lines = 0
+  for (const question of long) {
+    const more = wrapped(question[1], '   ').length
+    if (moved.length > 0 && lines + more > MESSAGE_LINES) break
+    moved.push(question)
+    lines += more
+  }
+  const one = moved.length === 1
+  const label = new Map(moved.map(([name], i) => [name, one ? 'Answer' : `Answer ${i + 1}`]))
+  const asked = moved.map(([, title], i) => (one ? wrapped(title, '').join('\n') : `${i + 1}. ${wrapped(title, '   ').join('\n   ')}`))
+  return {
+    message: `${asked.join('\n')}\n\n${message}`,
+    requestedSchema: {
+      ...schema,
+      properties: Object.fromEntries(
+        Object.entries(properties).map(([name, field]) => [
+          name,
+          label.has(name) ? { ...(field as object), title: label.get(name) } : field,
+        ]),
+      ),
+    },
+  }
 }
 
 // One session's updates: the harness's own, or one of its subagents' (ACP's subagents RFD), each with its

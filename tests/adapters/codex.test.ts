@@ -618,6 +618,79 @@ test("a question's shown text loses the characters that hide or reorder it; its 
   expect(step.called).toHaveLength(2)
 })
 
+// Claude Code's form cuts a field's title at about 47 characters, and codex-acp puts each of Codex's questions in
+// its field's title (seen live, 2026-11-22). The message shows 3 lines, each cropped at the terminal's width: a long
+// question goes first in it, wrapped to 72 columns, and its field gets a short label. A later one moves only while
+// every moved question still fits in those 3 lines; otherwise it keeps its own title. A short title stays put.
+const long = (n: number) => `The full E2E run found a scope conflict number ${n}: should the fix include the header change?`
+const field = (title: string) => ({ type: 'string', title, oneOf: [{ const: 'Yes', title: 'Yes' }] })
+const note = { type: 'string', title: 'Additional answer or note' }
+const titled = (id: string, titles: string[]) => ({
+  ...QUESTION,
+  id,
+  message: 'Codex keeps working while you answer.',
+  requestedSchema: {
+    type: 'object',
+    properties: Object.fromEntries(
+      titles.flatMap((t, i) => [
+        [`question_${i}`, field(t)],
+        [`question_${i}_note`, note],
+      ]),
+    ),
+  },
+})
+// The questions as the step server receives them.
+async function shown($: Parameters<TestBody>[0], on: TestOn, forms: object[]) {
+  const step = { called: [] as Record<string, unknown>[], result: replied({ action: 'decline' }) }
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), ...forms, ...CAPTURED.slice(10)]) }, { step })
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  await runTurn($)
+  return step.called.map((c) => c.question)
+}
+
+test("a question too long for its field's title is shown whole in the form's message", async ($, on) => {
+  const [one, two] = await shown($, on, [
+    titled('7-k1-q1', [long(1)]),
+    // Two lines each: the second would not fit in the 3 shown, so it keeps its own title.
+    titled('7-k1-q2', [long(1), 'Which target?', long(2)]),
+  ])
+  const message = [
+    'The full E2E run found a scope conflict number 1: should the fix include',
+    'the header change?',
+    '',
+    'Codex keeps working while you answer.',
+  ].join('\n')
+  expect(one).toMatchObject({ message, requestedSchema: { properties: { question_0: field('Answer'), question_0_note: note } } })
+  expect(two).toMatchObject({
+    message,
+    requestedSchema: { properties: { question_0: field('Answer'), question_1: field('Which target?'), question_2: field(long(2)) } },
+  })
+})
+
+test('long questions that fit in the shown lines are numbered in the message; a 40-character title stays', async ($, on) => {
+  const forty = 'Should the fix include the header change?'.slice(0, 40)
+  const fortyOne = `${forty}?`
+  const [form, three] = await shown($, on, [
+    titled('7-k1-q1', [fortyOne, forty, `${fortyOne} Again`]),
+    // Two lines and one: exactly the 3 shown, so both move.
+    titled('7-k1-q2', [long(1), fortyOne]),
+  ])
+  expect(form).toMatchObject({
+    message: [`1. ${fortyOne}`, `2. ${fortyOne} Again`, '', 'Codex keeps working while you answer.'].join('\n'),
+    requestedSchema: { properties: { question_0: field('Answer 1'), question_1: field(forty), question_2: field('Answer 2') } },
+  })
+  expect(three).toMatchObject({
+    message: [
+      '1. The full E2E run found a scope conflict number 1: should the fix',
+      '   include the header change?',
+      `2. ${fortyOne}`,
+      '',
+      'Codex keeps working while you answer.',
+    ].join('\n'),
+    requestedSchema: { properties: { question_0: field('Answer 1'), question_1: field('Answer 2') } },
+  })
+})
+
 // The question call is the one step call that reaches Claude Code's permission check: auto mode's classifier
 // gave it no verdict live (2026-11-16), so via settles the mode's ask on its own question call, and only that.
 test("via settles only the mode's ask on its own question call: a deny, a rule's ask, or another call's still stands", async ($, on) => {
