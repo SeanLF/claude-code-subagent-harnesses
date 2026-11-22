@@ -2,8 +2,8 @@
 // codex-acp's does when Codex hits its usage limit, with the cause in the error's data. With FAKE_ECHO
 // set it takes images and answers with what it was offered: the client's capabilities, as the SDK
 // hands them to an agent, and the prompt's block types; FAKE_STOP is the stop reason it ends with.
-// FAKE_CLOSE advertises session/close; FAKE_HANG holds the prompt until a cancel, or with `stubborn` past
-// it; FAKE_LOG names a file each cancel and close is written to. FAKE_OPTIONS offers config options, as
+// FAKE_CLOSE advertises session/close, and with `resume` session/resume too; FAKE_HANG holds the prompt until a
+// cancel, or with `stubborn` past it, or with `once` only the first prompt; FAKE_LOG names a file each cancel and close is written to. FAKE_OPTIONS offers config options, as
 // codex-acp does: a model and its reasoning efforts; each set one is logged. FAKE_REFUSE refuses every config
 // option and mode, with its reason in the error's data, as testy and codex-acp do. FAKE_ASK asks permission to run a
 // command before it answers, then answers with the option the relay chose. FAKE_QUESTION (form or url) asks the person
@@ -39,13 +39,15 @@ const ALL_OPTIONS: acp.SessionConfigOption[] = [
 // FAKE_OPTIONS=plain offers none that tune the model, as opencode's are.
 const OPTIONS = process.env.FAKE_OPTIONS === 'plain' ? ALL_OPTIONS.filter((o) => o.category !== 'model_config') : ALL_OPTIONS
 let release: (() => void) | undefined
+let prompts = 0
 // The stop reasons a prompt may end with: each one checked against the SDK's.
 const STOPS = ['end_turn', 'max_tokens', 'max_turn_requests', 'refusal', 'cancelled'] as const satisfies readonly acp.StopReason[]
 await acp
   .agent()
   .onRequest(acp.methods.agent.initialize, (ctx) => {
     offered = ctx.params.clientCapabilities
-    const sessionCapabilities = process.env.FAKE_CLOSE === '1' ? { close: {} } : {}
+    const sessionCapabilities =
+      process.env.FAKE_CLOSE === 'resume' ? { close: {}, resume: {} } : process.env.FAKE_CLOSE === '1' ? { close: {} } : {}
     return {
       protocolVersion: ctx.params.protocolVersion,
       agentCapabilities: { loadSession: true, promptCapabilities: { image: echo }, sessionCapabilities },
@@ -77,13 +79,17 @@ await acp
     log('close')
     return {}
   })
+  .onRequest(acp.methods.agent.session.resume, () => {
+    log('resume')
+    return {}
+  })
   .onNotification(acp.methods.agent.session.cancel, () => {
     log('cancel')
     if (process.env.FAKE_HANG !== 'stubborn') release?.()
   })
   .onRequest(acp.methods.agent.session.prompt, async (ctx) => {
-    if (process.env.FAKE_HANG) {
-      log('prompt')
+    if (process.env.FAKE_HANG) log('prompt')
+    if (process.env.FAKE_HANG && (process.env.FAKE_HANG !== 'once' || prompts++ === 0)) {
       // Said once the prompt is held, so a test waits on this line, never on time.
       await ctx.client.notify(acp.methods.client.session.update, {
         sessionId: 's1',
