@@ -4,7 +4,7 @@ import { relayEvents } from '../hooks/acp/events'
 import type { Norm } from '../hooks/acp/norm'
 import { answerCall, CHILD_CALL, type Job, type Mark, pump } from '../hooks/acp/steps'
 import { type Children, childRun, closeChildren, route, woken } from '../hooks/children'
-import { agentStore, NODE, run, STEP } from './helpers'
+import { agentInfo, agentStore, NODE, run, STEP } from './helpers'
 
 // Captured 2026-10-28 from relay/relay.mjs over codex-acp 2.3.1-preview.8 (codex-cli 0.165.0, gpt-6-luna),
 // asked to spawn one subagent: the standard subagent_update flow of ACP's subagents RFD, trimmed.
@@ -478,7 +478,7 @@ test('a child answers during a parent tool, whose continuation still delivers it
   const clock = mock.clock(on)
   agentStore(on, { a1: { harness: 'codex' } })
   mock.env(on, { HOME: '/home/u' })
-  on('agent.list', () => ({ value: [{ id: 'a1', description: 'parent', type: 'via:codex', status: 'running' }] }))
+  on('agent.list', () => ({ value: [agentInfo({ id: 'a1', description: 'parent', type: 'via:codex' })] }))
   on('session.messages', () => ({ value: [] }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }))
