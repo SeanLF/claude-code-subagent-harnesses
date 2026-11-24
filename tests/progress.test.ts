@@ -120,7 +120,7 @@ test('a run ended from outside while parked between pieces stops its harness', a
     plugin: { root: '/' },
   } as unknown as Parameters<typeof runHook>[2]
   const input = { agentId: 'a1', choice: {}, prompt: 'go', signal: new AbortController().signal, mode: 'default' as const }
-  const stream = runHook(world, pi, $, { ...input, probe: async () => undefined, save: async () => {} } as never)
+  const stream = runHook(world, pi, $, { ...input, save: async () => {} } as never)
   // Parked at its first chunk, as after a step that read this far; then ended, as endJob or an Esc does.
   await stream.next()
   await stream.return(undefined as never)

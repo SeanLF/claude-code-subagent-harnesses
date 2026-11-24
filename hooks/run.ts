@@ -33,8 +33,6 @@ export type RunInput = {
   mode: Mode
   installed?: string
   models?: readonly string[] // the harness's offered models, for a refused model's nearest
-  // Awaited only to sign, so a probe never delays the run or outlives an interrupted one.
-  probe(session: string | undefined): Promise<string | undefined>
   save(session: string): Promise<void>
 }
 
@@ -50,7 +48,7 @@ type RunState = {
   readonly compacting: Set<string>
   compacted: boolean // a /compact prompt that compacted and said nothing has the compaction as its answer
   readonly asks: Ask[]
-  readonly open: Set<string> // calls announced and not yet reported done
+  readonly open: Map<string, string> // calls announced and not yet reported done, by id, with their titles
   readonly last: Totals // the last model call's usage: Claude Code reads input + cache as the agent's context
 }
 type Context = { readonly w: World; readonly agentId: string; readonly adapter: Adapter; readonly type: string; readonly inbox?: Inbox }
@@ -66,7 +64,7 @@ const usageOf = (s: RunState, adapter: Adapter): TurnUsage => ({
 // Calls announced and not reported done: an interrupt or the run's end closes them as failed, or their rows
 // would stay running and via's tool.call hook would wait on them.
 function closeOpen(s: RunState, why: string): Mark[] {
-  const marks = [...s.open].map((id): Mark => ({ kind: 'call-end', id, output: why, failed: true }))
+  const marks = [...s.open.keys()].map((id): Mark => ({ kind: 'call-end', id, output: why, failed: true }))
   s.open.clear()
   return marks
 }
@@ -124,7 +122,7 @@ function take(s: RunState, c: Context, event: Norm): (TurnStepChunk | Mark)[] {
     case 'thinking':
       return [s.writer.thinking(event.t)]
     case 'call': {
-      s.open.add(event.id)
+      s.open.set(event.id, event.title)
       if (event.kind === 'compact') s.compacting.add(event.id)
       const input = { kind: event.kind, title: event.title, ...(event.path ? { path: event.path } : {}) }
       return [s.writer.call(event.id, input, usageOf(s, c.adapter))]
@@ -159,7 +157,7 @@ export async function* run(
   w: World,
   adapter: Adapter,
   $: Pick<EngineInterface, 'process' | 'clock' | 'plugin' | 'fs' | 'env' | 'ui'>,
-  { agentId, choice, prompt, signal, inbox, session, block = 0, guard, mode, installed, models = [], probe, save }: RunInput,
+  { agentId, choice, prompt, signal, inbox, session, block = 0, guard, mode, installed, models = [], save }: RunInput,
 ): AsyncGenerator<TurnStepChunk | Mark, RunResult> {
   const request = adapter.start({
     choice,
@@ -183,7 +181,7 @@ export async function* run(
     compacting: new Set(),
     compacted: false,
     asks: [],
-    open: new Set(),
+    open: new Map(),
     last: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 },
   }
   const c: Context = { w, agentId, adapter, type: `${$.plugin.name}:${adapter.name}`, ...(inbox ? { inbox } : {}) }
@@ -280,6 +278,13 @@ export async function* run(
     closeChildren(w, agentId, stopped === undefined ? undefined : 'the harness run was stopped')
     if (inbox) await closeInbox($, inbox, agentId, w.inboxes)
   }
+  // The harness ended its turn with a call still running, as agy 1.5.7 did with a command it sent to the
+  // background: its result is not in the answer, and the answer says so. Not a failed run's, whose failure says why.
+  const left = [...s.open].filter(([id]) => !s.compacting.has(id)).map(([, title]) => `\`${title}\``)
+  if (stopped === undefined && !failure && left.length > 0)
+    s.notices.push(
+      `${adapter.name} ended its turn before ${left.join(', ')} finished, so ${left.length > 1 ? 'their results are' : 'its result is'} not in this answer.`,
+    )
   yield* closeOpen(
     s,
     stopped === 'limit'
@@ -303,7 +308,6 @@ export async function* run(
       next: [...undeliveredSteers(inbox, s.steered), inbox.interrupt].join('\n\n'),
     }
   }
-  if (!s.answeredBy && !failure) s.answeredBy = (await probe(s.latest)) ?? ''
   const done = finish({
     adapter,
     choice,

@@ -12,6 +12,7 @@ import {
   get,
   type Printed,
   relayEvent,
+  relayEvents,
   relayEventsNamed,
   runRelay,
   sandbox,
@@ -231,6 +232,22 @@ test("a refused model, mode or config option keeps the agent's reason, not only 
     await refused({ RELAY_CONFIG: JSON.stringify({ reasoning_effort: 'high' }) }),
     'the agent refused reasoning_effort high: Invalid params: no reasoning_effort high here; try gpt-6-luna',
   )
+})
+
+// via saves the session the relay names: one named before a refusal would be resumed with no prompt in it.
+test('a run that fails setting up its new session names no session to save; one set up names it before its prompt', async () => {
+  const refused: Record<string, string>[] = [
+    { RELAY_MODEL: 'gpt-6.1-sol' },
+    { RELAY_AGENT_MODE: 'read-only' },
+    { RELAY_CONFIG: JSON.stringify({ reasoning_effort: 'high' }) },
+  ]
+  for (const env of refused) {
+    const run = await configured({ FAKE_REFUSE: '1', ...env })
+    assert.equal(run.status, 1)
+    assert.equal(relayEvent(run.events, 'session'), undefined)
+  }
+  const set = await configured({ RELAY_MODEL: 'gpt-6-luna' })
+  assert.deepEqual(relayEvents(set.events), ['session', 'model', 'steered', 'prompt_done', 'done'])
 })
 
 test('a permission request is answered by RELAY_POLICY: allow picks allow_once; deny, the default, reject_once', async () => {

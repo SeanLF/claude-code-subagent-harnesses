@@ -346,8 +346,6 @@ const result = await acp
         })
       : await ctx.request(acp.methods.agent.session.new, { cwd, mcpServers: [] })
     const sessionId = resume ?? (opened as acp.NewSessionResponse).sessionId
-    // cwd: so a title's paths can be shown relative to it.
-    out({ relay: 'session', sessionId, cwd })
     cancel = async () => {
       await ctx.notify(acp.methods.agent.session.cancel, { sessionId })
       // A moment for the agent to abort its tool before the kill.
@@ -441,6 +439,10 @@ const result = await acp
       return configOptions
     }
     const configOptions = await configure(opened as { configOptions?: acp.SessionConfigOption[] | null }, true)
+    // Said only once the session is set up, just before its first prompt: a model, mode or option the agent
+    // refuses ends the run first, and a new session saved then would hold no prompt to resume. cwd: so a
+    // title's paths can be shown relative to it.
+    out({ relay: 'session', sessionId, cwd })
     const current = configOptions.find((o) => o.id === 'model')
     if (current && 'currentValue' in current && typeof current.currentValue === 'string')
       out({ relay: 'model', name: current.currentValue })

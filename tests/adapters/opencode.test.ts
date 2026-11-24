@@ -162,6 +162,18 @@ test("a thinking line becomes opencode's effort config option", async ($, on) =>
   expect(JSON.parse(spawns[0]?.env?.RELAY_CONFIG ?? '{}')).toEqual({ effort: 'high' })
 })
 
+test('a call still running when the harness ends its turn is named in the answer, which stays signed', async ($, on) => {
+  const spawns: Spawn[] = []
+  // The command never reports its end: opencode ended its turn without it.
+  const unfinished = CAPTURED.filter((e) => !JSON.stringify(e).includes('"status":"completed"'))
+  arrange(on, spawns, { stdout: lines(unfinished) })
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const { result } = await runTurn($)
+  expect(result.answer).toBe(
+    'DONE\n\nopencode ended its turn before `echo hi > asked.txt` finished, so its result is not in this answer.\n\n— answered by opencode, openrouter/~deepseek/deepseek-flash-latest',
+  )
+})
+
 test('a lost session fails in plain words and is forgotten', async ($, on) => {
   const spawns: Spawn[] = []
   const records = arrange(on, spawns, {
@@ -208,7 +220,6 @@ test('an aborted run saves a session id in an unterminated tail without showing 
     session: undefined,
     guard: undefined,
     mode: 'default',
-    probe: async () => undefined,
     save: async (id) => {
       saved.push(id)
     },

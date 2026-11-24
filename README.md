@@ -51,14 +51,14 @@ Ask in plain language: "Have codex review src/api". Optional lines at the top of
 | `config: <option>=<value>` | Codex and OpenCode: one of the harness's own options that tune its model, such as `fast-mode=on`; one per line, `fast-mode=` drops it. Never a mode or sandbox option, and none in a read-only run |
 | `via-help` | Lists the harness's options instead of running it |
 
-A message to a running Codex, OpenCode or pi agent reaches it at its next step; `interrupt:` first stops the current step. That holds for Claude's SendMessage; one you type into the agent's view waits in Claude Code until the current step ends, so it can't cut a long command short. agy only takes follow-ups. A completed answer ends with the model the harness reports; one only taken from your `model:` line says `(requested)`, and a harness that won't say gets `model not reported`.
+A message to a running Codex, OpenCode, agy or pi agent reaches it at its next step; `interrupt:` first stops the current step. That holds for Claude's SendMessage; one you type into the agent's view waits in Claude Code until the current step ends, so it can't cut a long command short. A completed answer ends with the model the harness reports; one only taken from your `model:` line says `(requested)`, and a harness that won't say gets `model not reported`.
 
 ## Permissions
 
 - **Read-only:** Codex runs in its read-only sandbox with MCP servers and plugins off; OpenCode and pi get reading tools only.
 - **Bypass mode:** Codex runs with full access, no sandbox, as Claude Code itself does in bypass: its commands reach any file and the network.
 - **Otherwise:** Codex works in its workspace sandbox and asks before going past it; OpenCode, pi and agy use their own permission settings. Codex also edits outside a Git repository.
-- A harness's question (Codex past its sandbox, OpenCode where its config says `ask`) shows in Claude Code's dialog with only a one-time allow and a deny. There's no "always allow", so no approval outlives the run. No answer, or `claude -p`, is a deny. Bypass mode approves; don't-ask mode denies. The mode is set when the agent starts; a follow-up to an agent that finished takes the current one. pi and agy never ask.
+- A harness's question (Codex past its sandbox, OpenCode where its config says `ask`, agy under `request-review` or `strict`) shows in Claude Code's dialog with only a one-time allow and a deny. There's no "always allow", so no approval outlives the run. No answer, or `claude -p`, is a deny. Bypass mode approves; don't-ask mode denies. The mode is set when the agent starts; a follow-up to an agent that finished takes the current one. pi never asks.
 - When a harness starts its own subagent, `via` approves that call without asking you.
 
 ## Harnesses
@@ -66,7 +66,7 @@ A message to a running Codex, OpenCode or pi agent reaches it at its next step; 
 Each loads its own user config and instructions files (agy reads your global `AGENTS.md`).
 
 - `codex`: an interrupted command keeps running until the run ends. A subagent's task shows as its nested agent's prompt only with Codex's v1 subagent tools. Codex lets the model pick, and gpt-6-luna picks the v2 tools. These [send no task text](https://github.com/openai/codex/issues/61750), so the nested agent gets its title instead.
-- `agy`: commands run in Antigravity's sandbox, away from credentials such as `~/.kube`; its own file edits are not sandboxed. Per its changelog, background tasks it starts, such as dev servers, outlive a headless run.
+- `agy`: commands run in Antigravity's sandbox, away from credentials such as `~/.kube`; its own file edits are not sandboxed. A command that runs past 10 seconds goes to the background, and agy waits for it before it answers; if it ends its turn first, the answer names the command. `thinking:` takes low, medium or high, for Gemini models only.
 - `opencode`: a read-only run replaces your own `OPENCODE_CONFIG_CONTENT`.
 - `pi`: any model pi reaches by API key or `/login`. On a ChatGPT login it runs pi's own tools, not Codex's sandbox. `tools:` takes a pi tool list: one of only `read`, `grep`, `find`, `ls` is read-only and skips the project's `.pi` extensions, even in a project you trusted; any other, such as `-bash,read`, can edit and loads them.
 

@@ -254,7 +254,15 @@ test('help and description say every ACP harness steers mid-run and takes interr
 test('only a harness that steers tells Claude about interrupt:', () => {
   expect(descriptionOf(pi, [])).toContain('`interrupt:`')
   expect(descriptionOf(codex, [])).toContain('`interrupt:`')
-  expect(descriptionOf(agy, [])).not.toContain('interrupt')
+  expect(descriptionOf(STUB, [])).not.toContain('interrupt')
+})
+
+test("agy's help and description say it steers mid-run and takes interrupt:, and that its model checks a thinking level", () => {
+  const help = helpOf(agy, [])
+  expect(help).toContain('at its next step')
+  expect(help).toContain('interrupt:')
+  expect(help).toContain('a level the model does not offer is refused')
+  expect(descriptionOf(agy, [])).toContain('steers it mid-run')
 })
 
 test('a model line starting with - is refused, so it can never be read as a flag', () => {

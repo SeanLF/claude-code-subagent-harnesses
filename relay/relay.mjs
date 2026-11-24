@@ -10663,7 +10663,6 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
     return process.exit(1);
   }) : await ctx.request(methods.agent.session.new, { cwd, mcpServers: [] });
   const sessionId = resume ?? opened.sessionId;
-  out({ relay: "session", sessionId, cwd });
   cancel = async () => {
     await ctx.notify(methods.agent.session.cancel, { sessionId });
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -10731,6 +10730,7 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
     return configOptions2;
   };
   const configOptions = await configure(opened, true);
+  out({ relay: "session", sessionId, cwd });
   const current = configOptions.find((o) => o.id === "model");
   if (current && "currentValue" in current && typeof current.currentValue === "string")
     out({ relay: "model", name: current.currentValue });

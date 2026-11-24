@@ -253,7 +253,7 @@ function sessionEvents(cwdOf: () => string, from: string) {
         if (!text) return []
         // Each message is a new one; only the last is the answer.
         const out: Norm[] = []
-        // An agent that sends no message id speaks one message per prompt.
+        // An agent that sends no message id speaks one message per prompt, or between two tool calls.
         const id = u.messageId ?? 'unnamed'
         if (id !== speaking) {
           speaking = id
@@ -271,6 +271,8 @@ function sessionEvents(cwdOf: () => string, from: string) {
       case 'tool_call':
       case 'tool_call_update': {
         if (typeof u.toolCallId !== 'string') return []
+        // Without message ids (agy), a tool call between two texts is what makes them two messages.
+        if (speaking === 'unnamed') speaking = undefined
         const id = u.toolCallId
         if (typeof u.title === 'string') titles.set(id, u.title)
         if (typeof u.kind === 'string') kinds.set(id, u.kind)
