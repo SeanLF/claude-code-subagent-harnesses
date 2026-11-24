@@ -6,6 +6,8 @@ Stop calling `codex exec` from Bash. via makes Codex, Gemini (Antigravity), Open
 
 ![A via:codex agent in Claude Code, its steps folded into lines such as "Ran 4 commands"](https://github.com/user-attachments/assets/e36113c3-b375-4f0d-99ae-5851e73105e9)
 
+A harness's steps fold into one line, such as "Ran 3 commands, 1 failed"; ctrl+o shows each step and its output.
+
 ## Set up
 
 `/plugin install via --marketplace SeanLF/claude-code-subagent-harnesses` in Claude Code, or from a shell:

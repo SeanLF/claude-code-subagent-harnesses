@@ -339,11 +339,22 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'ToolUse' }, (_, e, next) => (e.props.tool === world.tool ? drawCall(e.props) : next(e)))
   // Claude Code decides which calls fold; via only counts them, and only a run of its own calls alone.
-  on('ui.render', { component: 'ToolGroup' }, (_, e, next) =>
-    !e.props.isExpanded && e.props.isCallsOnly === true && e.props.calls.every((call) => call.tool === world.tool)
-      ? drawGroup(e.props)
-      : next(e),
-  )
+  // By its first call's id: the groups that showed another row (a hook timing, a recalled memory), which stays.
+  const others = new Set<string>()
+  on('ui.render', { component: 'ToolGroup' }, (_, e, next) => {
+    const { calls, isCallsOnly, isExpanded } = e.props
+    const ours = calls.length > 0 && calls.every((call) => call.tool === world.tool)
+    const failed = calls.some((call) => call.isErrored || call.isInterrupted)
+    const group = calls[0]?.tool_use_id
+    if (ours && isCallsOnly === false && !failed && group !== undefined) others.add(group)
+    // A failed or interrupted call also clears isCallsOnly: its group keeps via's line, not the engine's, so a group
+    // keeps one drawer for its life. A group that showed another row keeps the engine's from then on. The props
+    // can't tell "failed" from "failed, with another row", so a row that joins with or after a failure, in a group
+    // via draws, is hidden (tests/group-rules.test.ts): what a ToolGroup hook can't avoid while it draws the whole
+    // group, rather than only its summary.
+    const plain = isCallsOnly === true || (failed && !(group !== undefined && others.has(group)))
+    return !isExpanded && ours && plain ? drawGroup(e.props) : next(e)
+  })
   // The row shows the output already, all of it when expanded.
   on('ui.render', { component: 'ToolResult' }, (_, e, next) => (e.props.tool === world.tool ? { type: 'Box', children: [] } : next(e)))
 
