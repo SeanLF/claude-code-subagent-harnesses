@@ -2,7 +2,9 @@
 
 # via
 
-Stop calling `codex exec` from Bash. via makes Codex, Gemini (Antigravity), OpenCode and pi native Claude Code subagents: Claude hands one a task, it runs on your own login, and you can follow up or steer it like any other subagent.
+Keep Claude Code as the lead and hand the work to Codex, Gemini (Antigravity), OpenCode or pi, as native Claude Code subagents on your own login. Their steps cost no Claude tokens, and only their answer comes back into Claude's context. You can follow up or steer them like any other subagent.
+
+I wanted to keep Claude Code as my main tool but use my other subscriptions instead of paying for more Claude tokens. I was tired of Claude running `codex` from Bash with no way to see what it was doing. Everything else I found either swapped Claude's model or read another terminal's screen, which wastes tokens. ACP turned out to be the right way to talk to the other CLIs, so via makes them real Claude Code subagents.
 
 ![A via:codex agent in Claude Code, its steps folded into lines such as "Ran 4 commands"](https://github.com/user-attachments/assets/e36113c3-b375-4f0d-99ae-5851e73105e9)
 
@@ -20,7 +22,7 @@ Needs Node 22.18 or later on PATH; Codex also needs npm. Install at least one ha
 
 ## Who it's for
 
-Claude Code users who also pay for ChatGPT or Google AI, or want OpenCode's free models, and want to hand off tasks or get a second model's review without switching windows.
+Claude Code users who want Claude to plan and lead while cheaper models do the work: on a ChatGPT or Google plan, OpenCode's free models, or any provider through pi. Also for a second model's review, without switching windows.
 
 Codex and the Antigravity CLI (`agy`) are OpenAI's and Google's own tools, so you sign in to them directly. Google has [suspended accounts](https://discuss.ai.google.dev/t/paid-pro-subscriber-banned-instantly-for-testing-opencode-oauth/124403) whose Google login was used through third-party tools, though it later said it was lifting those bans. `via` stores no credentials, and no Claude subagent sits in between: the harness's work costs no Claude tokens; Claude only writes the task and reads the answer.
 
@@ -71,7 +73,7 @@ Each loads its own user config and instructions files (agy reads your global `AG
 
 - `codex`: an interrupted command keeps running until the run ends. A subagent's task shows as its nested agent's prompt only with Codex's v1 subagent tools. Codex lets the model pick, and gpt-6-luna picks the v2 tools. These [send no task text](https://github.com/openai/codex/issues/61750), so the nested agent gets its title instead.
 - `agy`: commands run in Antigravity's sandbox, away from credentials such as `~/.kube`; its own file edits are not sandboxed. A command that runs past 10 seconds goes to the background, and agy waits for it before it answers; if it ends its turn first, the answer names the command. `thinking:` takes low, medium or high, for Gemini models only.
-- `opencode`: a read-only run replaces your own `OPENCODE_CONFIG_CONTENT`.
+- `opencode`: a read-only run replaces your own `OPENCODE_CONFIG_CONTENT`. An OpenCode background service that starts while a `via` OpenCode agent is working resumes the agent's turn as if it had died, so the turn runs twice ([anomalyco/opencode#51213](https://github.com/anomalyco/opencode/issues/51213)). Opening `opencode` starts one when none is running, and replaces one of another version, as after an upgrade. Start it (`opencode service start`, or `restart` after an upgrade) while no `via` agent is working.
 - `pi`: any model pi reaches by API key or `/login`. On a ChatGPT login it runs pi's own tools, not Codex's sandbox. `tools:` takes a pi tool list: one of only `read`, `grep`, `find`, `ls` is read-only and skips the project's `.pi` extensions, even in a project you trusted; any other, such as `-bash,read`, can edit and loads them.
 
 ## Settings
