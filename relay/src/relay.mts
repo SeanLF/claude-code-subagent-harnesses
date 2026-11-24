@@ -22,7 +22,7 @@
 //                     goes to the plugin)
 // Prints each ACP session update as received, and {"relay": ...} lines for its own events.
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk/unstable'
@@ -102,12 +102,20 @@ const attached = (text: string): acp.ContentBlock[] => {
     const mimeType = IMAGE_TYPES[path.split('.').pop()?.toLowerCase() ?? '']
     const real = realOrNone(path)
     if (!mimeType || !real || !IMAGE_ROOTS.some((root) => real.startsWith(`${root}/`))) continue
+    // One open, then every check and the read on it: a file swapped after a check is never the one read. Not
+    // blocking, so a named pipe can't stall the prompt; not following the file itself if it became a link after
+    // the realpath (a folder above it swapped for a link still is followed).
+    let fd: number | undefined
     try {
-      if (statSync(real).size > 5 * 1024 * 1024) continue
-      const bytes = readFileSync(real)
+      fd = openSync(real, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW)
+      const stat = fstatSync(fd)
+      if (!stat.isFile() || stat.size > 5 * 1024 * 1024) continue
+      const bytes = readFileSync(fd)
       if (MAGIC[mimeType]?.(bytes)) blocks.push({ type: 'image', mimeType, data: bytes.toString('base64') })
     } catch {
       // Not readable: the path stays text.
+    } finally {
+      if (fd !== undefined) closeSync(fd)
     }
   }
   return blocks

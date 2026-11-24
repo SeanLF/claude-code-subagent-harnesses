@@ -2,6 +2,7 @@
 // the relay and the agent, so nothing of the person's (a RELAY_* or FAKE_* variable of theirs) changes a result.
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -73,6 +74,14 @@ test('an image under the working folder goes along to an agent that takes images
   writeFileSync(join(outside, 'secret.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
   const prompt = `Look at ${png}, ${join(dir, 'gone.png')}, ${join(dir, 'fake.png')}, ${join(outside, 'secret.png')} and docs${png}`
   assert.deepEqual((await said(prompt, dir)).blocks, ['text', 'image:image/png:8'])
+})
+
+test('an image path that is not a regular file, such as a named pipe, stays text and never stalls the prompt', async () => {
+  // A size check then a read are two opens: a pipe passes the first (size 0) and blocks the second for a writer.
+  const dir = sandbox().work
+  execFileSync('mkfifo', [join(dir, 'pipe.png')])
+  writeFileSync(join(dir, 'shot.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+  assert.deepEqual((await said(`See ${join(dir, 'pipe.png')} and ${join(dir, 'shot.png')}`, dir)).blocks, ['text', 'image:image/png:8'])
 })
 
 test('a symlink or .. that leads out of the working folder stays text, and at most four images go along', async () => {

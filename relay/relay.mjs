@@ -7,7 +7,7 @@ var __export = (target, all) => {
 
 // relay/src/relay.mts
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 
@@ -10472,11 +10472,16 @@ var attached = (text) => {
     const mimeType = IMAGE_TYPES[path.split(".").pop()?.toLowerCase() ?? ""];
     const real = realOrNone(path);
     if (!mimeType || !real || !IMAGE_ROOTS.some((root) => real.startsWith(`${root}/`))) continue;
+    let fd;
     try {
-      if (statSync(real).size > 5 * 1024 * 1024) continue;
-      const bytes = readFileSync(real);
+      fd = openSync(real, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.size > 5 * 1024 * 1024) continue;
+      const bytes = readFileSync(fd);
       if (MAGIC[mimeType]?.(bytes)) blocks.push({ type: "image", mimeType, data: bytes.toString("base64") });
     } catch {
+    } finally {
+      if (fd !== void 0) closeSync(fd);
     }
   }
   return blocks;
