@@ -22,3 +22,7 @@
 - No tokens and nothing of yours: the fake agent, the fake model and an empty HOME, no network beyond localhost. What only a real model can show goes in an eval (`evals/`, `pnpm eval`), with a cost cap.
 - A version a test depends on lives where Dependabot bumps it.
 - `pnpm lint` holds every test in the repository to the first two (`checks/tests.mts`).
+
+## Commits
+
+- A commit that leaves known work undone opens an issue for it, and its message names the issue. A gap noted only in a commit message is forgotten: #41 noted that `answerCall` still waited without a bound, and three weeks later a Codex step was refused for it.
