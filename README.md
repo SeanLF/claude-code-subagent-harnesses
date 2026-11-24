@@ -71,7 +71,7 @@ Each loads its own user config and instructions files (agy reads your global `AG
 
 - `codex`: an interrupted command keeps running until the run ends. A subagent's task shows as its nested agent's prompt only with Codex's v1 subagent tools. Codex lets the model pick, and gpt-6-luna picks the v2 tools. These [send no task text](https://github.com/openai/codex/issues/61750), so the nested agent gets its title instead.
 - `agy`: commands run in Antigravity's sandbox, away from credentials such as `~/.kube`; its own file edits are not sandboxed. A command that runs past 10 seconds goes to the background, and agy waits for it before it answers; if it ends its turn first, the answer names the command. `thinking:` takes low, medium or high, for Gemini models only.
-- `opencode`: a read-only run replaces your own `OPENCODE_CONFIG_CONTENT`.
+- `opencode`: a read-only run replaces your own `OPENCODE_CONFIG_CONTENT`. An OpenCode background service that starts while a `via` OpenCode agent is working resumes the agent's turn as if it had died, so the turn runs twice ([anomalyco/opencode#51213](https://github.com/anomalyco/opencode/issues/51213)). Opening `opencode` starts one when none is running, and replaces one of another version, as after an upgrade. Start it (`opencode service start`, or `restart` after an upgrade) while no `via` agent is working.
 - `pi`: any model pi reaches by API key or `/login`. On a ChatGPT login it runs pi's own tools, not Codex's sandbox. `tools:` takes a pi tool list: one of only `read`, `grep`, `find`, `ls` is read-only and skips the project's `.pi` extensions, even in a project you trusted; any other, such as `-bash,read`, can edit and loads them.
 
 ## Settings
