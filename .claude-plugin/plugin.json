@@ -1,6 +1,6 @@
 {
   "name": "via",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Codex, Gemini (Antigravity), OpenCode and pi as native Claude Code subagents, on your own login and plan, instead of a Bash call to their CLI.",
   "keywords": [
     "codex",

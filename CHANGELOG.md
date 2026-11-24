@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.11.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.10.0...via-v0.11.0) (2026-11-24)
+
+
+### Features
+
+* **via:** a harness's question is asked in Claude Code's question dialog, and can go to the main agent ([194febf](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/194febf28b760e47f81369cdc8bc06f9ee6a281f))
+* **via:** a new harness session is named after its via agent, where the agent can retitle one ([7b0509f](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/7b0509fda40ed5c49faeaddecbf117b8b6a83b86))
+* **via:** agy runs over ACP, through the relay Codex and OpenCode use ([babca6c](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/babca6c216ccebc81165f96ac9c1c9ec74b7646c))
+* **via:** VIA_TRACE writes a trace of each relay run; Biome holds tests to the Tests bar ([8e3d06c](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/8e3d06c123a4040f55234abdf69ddbf35f990e7b))
+
+
+### Bug Fixes
+
+* deliver child completions during parent tools ([#27](https://github.com/SeanLF/claude-code-subagent-harnesses/issues/27)) ([47b0b1d](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/47b0b1d37cd970d307c21f566ae16adc66aef5b3))
+* **via:** a group of via steps is one counted line from its first call, so it no longer changes height ([f360498](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/f360498ec54f13c6cea36cb1111934c5a9256fcd))
+* **via:** a harness command longer than ten seconds is reported, not denied ([ba3f25d](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/ba3f25d7ff0a4c10f9e0d86541600b47d361a99f))
+* **via:** a long Codex question shows whole, not cut at its field's title ([7f36eee](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/7f36eeef664e8b612ec6a375ea6bf3621d79a507))
+* **via:** an image path in a prompt is checked and read through one open file ([0934cac](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/0934cac55846d40df8d22363c153ca059e7ccd2b))
+* **via:** an interrupt stops the commands of the step it cuts off ([#58](https://github.com/SeanLF/claude-code-subagent-harnesses/issues/58)) ([5838e5a](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/5838e5ab1447bfae3d47d23368e1b43abe73d0f5))
+* **via:** Codex runs on codex-acp 2.10.0; CI tests Codex 0.172.0 and OpenCode 2.4.1 ([4fc914b](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/4fc914b634e1df2b3e34ee7b1cd70e42926b56e6))
+* **via:** Codex runs on codex-acp 2.9.0, the relay on ACP SDK 2.9.1 ([4ae5300](https://github.com/SeanLF/claude-code-subagent-harnesses/commit/4ae5300be03a8a1632ea0f7117615d0d749279d9))
+
 ## [0.10.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.9.0...via-v0.10.0) (2026-11-17)
 
 
