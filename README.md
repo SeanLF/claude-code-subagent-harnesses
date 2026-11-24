@@ -2,7 +2,9 @@
 
 # via
 
-Stop calling `codex exec` from Bash. via makes Codex, Gemini (Antigravity), OpenCode and pi native Claude Code subagents: Claude hands one a task, it runs on your own login, and you can follow up or steer it like any other subagent.
+Keep Claude Code as the lead and hand the work to Codex, Gemini (Antigravity), OpenCode or pi, as native Claude Code subagents on your own login. Their steps cost no Claude tokens, and only their answer comes back into Claude's context. You can follow up or steer them like any other subagent.
+
+I wanted to keep Claude Code as my main tool but use my other subscriptions instead of paying for more Claude tokens. I was tired of Claude running `codex` from Bash with no way to see what it was doing. Everything else I found either swapped Claude's model or read another terminal's screen, which wastes tokens. ACP turned out to be the right way to talk to the other CLIs, so via makes them real Claude Code subagents.
 
 ![A via:codex agent in Claude Code, its steps folded into lines such as "Ran 4 commands"](https://github.com/user-attachments/assets/e36113c3-b375-4f0d-99ae-5851e73105e9)
 
@@ -20,7 +22,7 @@ Needs Node 22.18 or later on PATH; Codex also needs npm. Install at least one ha
 
 ## Who it's for
 
-Claude Code users who also pay for ChatGPT or Google AI, or want OpenCode's free models, and want to hand off tasks or get a second model's review without switching windows.
+Claude Code users who want Claude to plan and lead while cheaper models do the work: on a ChatGPT or Google plan, OpenCode's free models, or any provider through pi. Also for a second model's review, without switching windows.
 
 Codex and the Antigravity CLI (`agy`) are OpenAI's and Google's own tools, so you sign in to them directly. Google has [suspended accounts](https://discuss.ai.google.dev/t/paid-pro-subscriber-banned-instantly-for-testing-opencode-oauth/124403) whose Google login was used through third-party tools, though it later said it was lifting those bans. `via` stores no credentials, and no Claude subagent sits in between: the harness's work costs no Claude tokens; Claude only writes the task and reads the answer.
 

@@ -1,7 +1,7 @@
 {
   "name": "via",
   "version": "0.10.0",
-  "description": "Codex, Gemini (Antigravity), OpenCode and pi as native Claude Code subagents, on your own login and plan, instead of a Bash call to their CLI.",
+  "description": "Claude Code leads; Codex, Gemini (Antigravity), OpenCode and pi do the work as native subagents on your own login, saving Claude's tokens and context.",
   "keywords": [
     "codex",
     "openai",
@@ -15,7 +15,10 @@
     "subagent",
     "multi-agent",
     "delegate",
-    "acp"
+    "acp",
+    "delegation",
+    "tokens",
+    "context"
   ],
   "author": {
     "name": "Sean Floyd"
