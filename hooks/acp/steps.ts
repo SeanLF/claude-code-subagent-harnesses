@@ -45,8 +45,8 @@ export type Steps<Handed extends Line = Line> = {
   tool: string
   spawns: Map<string, string> // by an Agent tool_use id a step made: the harness subagent it shows
   jobs: Map<string, Job> // by agent id
-  // By tool_use_id: the harness's own call id; question, when the call asks the person (the hook lets it through).
-  calls: Map<string, { agentId: string; id: string; question?: true }>
+  // By tool_use_id: the harness's own call id and input; question, when the call asks the person (the hook lets it through).
+  calls: Map<string, { agentId: string; id: string; input?: CallInput; question?: true }>
   // By agent id: the harness's questions handed to the main agent, in the order they were handed (id: the harness's
   // question id). Only the first is sent to the main agent (sent, once it is), and only a sent one takes its answer;
   // the next is sent once it is answered or closed. Each goes once the harness closes it or the run ends: nothing then
@@ -249,7 +249,7 @@ export async function* pump(
       if (c.kind === 'call-start') {
         job.count += 1
         const id = `${STEP_CALL}${e.turnId.replace(/[^A-Za-z0-9_]/g, '_')}_${job.count}`
-        w.calls.set(id, { agentId: e.agentId ?? '', id: c.id, ...(c.input.question ? { question: true as const } : {}) })
+        w.calls.set(id, { agentId: e.agentId ?? '', id: c.id, input: c.input, ...(c.input.question ? { question: true as const } : {}) })
         const index = block(-1 - job.count)
         yield { kind: 'tool', index, id, name: w.tool }
         yield { kind: 'input', index, json: JSON.stringify(c.input) }
@@ -350,7 +350,20 @@ export async function answerCall(
         continue
       }
       if (r.value.kind === 'call-end') job.outputs.set(r.value.id, { output: r.value.output, failed: r.value.failed })
-      else job.held.push(r.value)
+      else if (r.value.kind === 'spawn') {
+        // Let the next step show the child now, while the harness's tool is still running. A native
+        // Agent call preserves the child's hooks; spawning from this hook would skip it in the child.
+        // The continuation only reads this same run and call id: it never executes the tool again.
+        const input = ref.input ?? { kind: 'other', title: 'harness tool' }
+        job.held.unshift(r.value, {
+          kind: 'call-start',
+          id: ref.id,
+          input: input.kind === 'wait' ? input : { kind: 'wait', title: `Waiting for ${input.title}` },
+          usage: null,
+        })
+        w.calls.delete(toolUseId as string)
+        return { result: 'The harness tool is still running; showing its subagent now.' }
+      } else job.held.push(r.value)
     }
   } finally {
     unlend()
