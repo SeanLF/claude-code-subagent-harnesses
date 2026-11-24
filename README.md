@@ -1,4 +1,6 @@
-# <img src=".claude-plugin/icon.png" alt="" width="40" align="top"> via
+<img src=".claude-plugin/icon.png" alt="via's icon: a hermit crab peeking out of its shell" width="96">
+
+# via
 
 Stop calling `codex exec` from Bash. via makes Codex, Gemini (Antigravity), OpenCode and pi native Claude Code subagents: Claude hands one a task, it runs on your own login, and you can follow up or steer it like any other subagent.
 
