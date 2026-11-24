@@ -10,7 +10,23 @@
     {
       "name": "via",
       "source": "./",
-      "description": "Hand work to another coding-agent harness as a native Claude Code subagent."
+      "description": "Codex, Gemini (Antigravity), OpenCode and pi as native Claude Code subagents, on your own login and plan, instead of a Bash call to their CLI.",
+      "category": "development",
+      "keywords": [
+        "codex",
+        "openai",
+        "gpt",
+        "chatgpt",
+        "gemini",
+        "antigravity",
+        "google",
+        "opencode",
+        "pi",
+        "subagent",
+        "multi-agent",
+        "delegate",
+        "acp"
+      ]
     }
   ]
 }

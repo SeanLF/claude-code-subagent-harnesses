@@ -1,6 +1,6 @@
 # via
 
-Claude hands a task to Codex, Antigravity, OpenCode or pi, and each runs it through its own CLI and login, as a Claude Code subagent.
+Stop calling `codex exec` from Bash. via makes Codex, Gemini (Antigravity), OpenCode and pi native Claude Code subagents: Claude hands one a task, it runs on your own login, and you can follow up or steer it like any other subagent.
 
 ![A via:codex agent in Claude Code, its steps folded into lines such as "Ran 4 commands"](https://github.com/user-attachments/assets/e36113c3-b375-4f0d-99ae-5851e73105e9)
 

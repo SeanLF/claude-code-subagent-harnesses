@@ -1,7 +1,22 @@
 {
   "name": "via",
   "version": "0.10.0",
-  "description": "A Claude Code subagent type whose model steps run another coding-agent harness CLI, so agents show in Claude Code's agent list, stream live and take follow-ups.",
+  "description": "Codex, Gemini (Antigravity), OpenCode and pi as native Claude Code subagents, on your own login and plan, instead of a Bash call to their CLI.",
+  "keywords": [
+    "codex",
+    "openai",
+    "gpt",
+    "chatgpt",
+    "gemini",
+    "antigravity",
+    "google",
+    "opencode",
+    "pi",
+    "subagent",
+    "multi-agent",
+    "delegate",
+    "acp"
+  ],
   "author": {
     "name": "Sean Floyd"
   },
