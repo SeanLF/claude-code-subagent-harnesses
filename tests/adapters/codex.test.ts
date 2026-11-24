@@ -98,10 +98,11 @@ function arrange(
     // tool.call hook reads as the MCP tool's content blocks (as Claude Code 2.1.325 gives it).
     step?: { called: Record<string, unknown>[]; result: () => unknown }
     unheld?: boolean // the stream goes on past a question without waiting for its answer
+    env?: Record<string, string> // more of the person's environment, beside HOME
   } = {},
 ) {
   const clock = mock.clock(on)
-  mock.env(on, { HOME: '/home/u' })
+  mock.env(on, { HOME: '/home/u', ...o.env })
   on('agent.list', () => ({ value: [AGENT] }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_, e, next) => next(e))
@@ -1020,3 +1021,19 @@ test(
     expect(JSON.stringify(await call)).toContain('done')
   },
 )
+
+test('with VIA_TRACE=1 a codex run asks the relay for a trace under ~/.claude/via/traces', async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns, undefined, { env: { VIA_TRACE: '1' } })
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'run the tests' })
+  await runTurn($)
+  expect(spawns[0]?.env?.RELAY_TRACE).toMatch(/^\/home\/u\/\.claude\/via\/traces\/a1-\d+\.jsonl$/)
+})
+
+test('without VIA_TRACE a codex run asks for no trace', async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'run the tests' })
+  await runTurn($)
+  expect(spawns[0]?.env).not.toHaveProperty('RELAY_TRACE')
+})

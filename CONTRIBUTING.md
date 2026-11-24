@@ -3,6 +3,7 @@
 `mise install && pnpm install`, then `pnpm lint` (Biome), `pnpm test` and `pnpm validate`. CI runs all three; the last two need the `claude` CLI. `pnpm typecheck` needs the typings a logged-in Claude Code session writes to `.claude-plugin/types/`.
 
 - Codex, OpenCode and agy run over [ACP](https://agentclientprotocol.com) (Agent Client Protocol, a standard way to drive coding agents) through `relay/relay.mjs`, a committed bundle. Run `pnpm build:relay` after changing `relay/src/` or the SDK version; CI fails when the bundle doesn't match.
+- `VIA_TRACE=1` in Claude Code's environment makes each run behind the relay write a trace: the prompt, every line the relay printed and each inbox line, with times, in `~/.claude/via/traces/<agent>-<time>.jsonl`. For development; pi, which runs without the relay, writes none. A trace holds everything the agent read, ran and printed, and every message and answer you sent it, so it may hold secrets: it is readable only by you, and nothing deletes it.
 - `relay/codex-acp/` is the lockfile `codex-acp` installs from (`npm ci --ignore-scripts`); `hooks/install.ts` does the install.
 - `hooks/acp/` is the generic ACP client; `pnpm lint` fails if it imports anything of `via`'s.
 - `hooks/record.ts` keeps one record per agent in `$.store`, so an agent continued in a new process still has its session, mode and last answer.
@@ -21,7 +22,7 @@
 - A new test fails without the change it covers. Show it before committing.
 - No tokens and nothing of yours: the fake agent, the fake model and an empty HOME, no network beyond localhost. What only a real model can show goes in an eval (`evals/`, `pnpm eval`), with a cost cap.
 - A version a test depends on lives where Dependabot bumps it.
-- `pnpm lint` holds every test in the repository to the first two (`checks/tests.mts`).
+- The first two hold by construction and by lint: the test runners pick up only TypeScript test files (`*.test.ts(x)`, `relay/test/**/*.test.mts`, `mcp/test/*.test.mts`), and Biome's test override in `biome.jsonc` refuses a timer, `global`, `globalThis` and `AbortSignal` in a test, and a test importing a JavaScript file of ours.
 
 ## Commits
 

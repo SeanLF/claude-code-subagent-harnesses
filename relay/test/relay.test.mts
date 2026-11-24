@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import type { ClientCapabilities } from '@agentclientprotocol/sdk/unstable'
@@ -82,6 +82,29 @@ test('an image path that is not a regular file, such as a named pipe, stays text
   execFileSync('mkfifo', [join(dir, 'pipe.png')])
   writeFileSync(join(dir, 'shot.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
   assert.deepEqual((await said(`See ${join(dir, 'pipe.png')} and ${join(dir, 'shot.png')}`, dir)).blocks, ['text', 'image:image/png:8'])
+})
+
+test('with RELAY_TRACE the relay appends the prompt and every line it prints to that file, creating its folder', async () => {
+  const trace = join(sandbox().work, 'traces', 'run.jsonl')
+  const run = await fake({ RELAY_TRACE: trace }, 'hello trace')
+  const lines = readFileSync(trace, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { t: string; kind: string; data: unknown })
+  assert.deepEqual(lines[0]?.kind === 'prompt' && lines[0].data, 'hello trace')
+  assert.deepEqual(
+    lines.filter((line) => line.kind === 'out').map((line) => line.data),
+    run.events,
+  )
+  assert.ok(lines.every((line) => !Number.isNaN(Date.parse(line.t))))
+  // What the agent read and ran: the owner's alone.
+  assert.equal(statSync(trace).mode & 0o777, 0o600)
+})
+
+test('without RELAY_TRACE the relay writes no trace', async () => {
+  const dir = sandbox().work
+  await fake({}, 'hi', dir)
+  assert.equal(existsSync(join(dir, 'traces')), false)
 })
 
 test('a symlink or .. that leads out of the working folder stays text, and at most four images go along', async () => {

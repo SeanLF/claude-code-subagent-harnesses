@@ -13,6 +13,8 @@
       "types/**",
       "*.json",
       "relay/*.json",
+      // A test anywhere, so the test override below sees it wherever it lives.
+      "**/*.test.*",
       "!.release-please-manifest.json"
     ]
   },
@@ -37,6 +39,50 @@
               "options": {
                 "patterns": [
                   { "group": ["../*"], "message": "hooks/acp is the generic ACP client: it imports only 'claude-code' and its own files." }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      // A test waits on the event it needs, never on time (CONTRIBUTING.md, Tests). The one backstop that ends a
+      // hung run is relay/test/support/backstop.mts; a spawned process's timeout and a test's timeout are options.
+      "includes": ["tests/**", "relay/test/**", "mcp/test/**", "**/*.test.*", "!relay/test/support/backstop.mts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": {
+                "deniedGlobals": {
+                  "setTimeout": "A test waits on the event it needs, not on time; a backstop goes through relay/test/support/backstop.mts.",
+                  "setInterval": "A test waits on the event it needs, not on time; a backstop goes through relay/test/support/backstop.mts.",
+                  "setImmediate": "A test waits on the event it needs, not on time; a backstop goes through relay/test/support/backstop.mts.",
+                  // Every way to reach a timer through them (a member, a computed key, destructuring).
+                  "globalThis": "A test names no timer, through globalThis or otherwise: it waits on the event it needs.",
+                  "global": "A test names no timer, through global or otherwise: it waits on the event it needs.",
+                  // AbortSignal.timeout, in any form: a test that needs a signal makes an AbortController.
+                  "AbortSignal": "A test waits on the event it needs, not on time: use an AbortController, not AbortSignal.timeout."
+                }
+              }
+            },
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "timers": "A test waits on the event it needs, not on time.",
+                  "node:timers": "A test waits on the event it needs, not on time.",
+                  "timers/promises": "A test waits on the event it needs, not on time.",
+                  "node:timers/promises": "A test waits on the event it needs, not on time."
+                },
+                // A test and its helpers are TypeScript, so they are type-checked: none imports a JavaScript file of ours.
+                "patterns": [
+                  {
+                    "group": ["./**/*.js", "./**/*.mjs", "./**/*.cjs", "../**/*.js", "../**/*.mjs", "../**/*.cjs"],
+                    "message": "A test and its helpers are TypeScript (.ts, .mts), so they are type-checked."
+                  }
                 ]
               }
             }

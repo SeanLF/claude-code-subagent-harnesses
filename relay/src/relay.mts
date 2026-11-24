@@ -18,19 +18,53 @@
 //   RELAY_CONFIG      a JSON object of other config options to set, such as {"reasoning_effort": "high"}
 //   RELAY_OPTIONS     a JSON object of the person's own config options, such as {"fast-mode": "on"}: never a
 //                     mode, model or thinking option, and each checked against what the session offers
+//   RELAY_TRACE       for development: a file the relay appends the prompt, its printed lines and inbox lines to
 //   RELAY_POLICY      how permission requests are answered: allow, deny (the default) or ask (every request
 //                     goes to the plugin)
 // Prints each ACP session update as received, and {"relay": ...} lines for its own events.
 import { spawn } from 'node:child_process'
-import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import {
+  appendFileSync,
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs'
+import { dirname, join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk/unstable'
 
 type Policy = 'allow' | 'deny' | 'ask'
 type Answer = (optionId: string | null) => void
 
-const out = (event: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(event)}\n`)
+// RELAY_TRACE, for development (via sets it under VIA_TRACE=1): a file the relay appends the prompt, every line it
+// prints and each inbox line to, one {t, kind, data} object per line. A trace that can't be written is skipped. It
+// holds everything the agent read and ran, so it is the owner's alone (0600, its folder 0700).
+const tracePath = process.env.RELAY_TRACE
+if (tracePath) {
+  try {
+    mkdirSync(dirname(tracePath), { recursive: true, mode: 0o700 })
+  } catch {
+    // The appends below fail too, and are skipped.
+  }
+}
+const trace = (kind: 'prompt' | 'out' | 'inbox', data: unknown) => {
+  if (!tracePath) return
+  try {
+    appendFileSync(tracePath, `${JSON.stringify({ t: new Date().toISOString(), kind, data })}\n`, { mode: 0o600 })
+  } catch {
+    // Development only: never a reason to fail the run.
+  }
+}
+const out = (event: Record<string, unknown>) => {
+  trace('out', event)
+  process.stdout.write(`${JSON.stringify(event)}\n`)
+}
 let agentPid: number | undefined
 // busy: a prompt of the main loop is running. spokeIdle: the agent wrote an answer while none was.
 let busy = false
@@ -152,6 +186,7 @@ const prompt = await new Promise<string>((resolve) => {
   process.stdin.on('data', (chunk: string) => (text += chunk))
   process.stdin.on('end', () => resolve(text))
 })
+trace('prompt', prompt)
 
 // Its own process group, so a stop also reaches what it started.
 const agent = spawn(bin as string, args, { stdio: ['pipe', 'pipe', 'inherit'], detached: true })
@@ -520,6 +555,7 @@ const result = await acp
         for (const line of text.slice(offset, end).split('\n')) {
           if (!line.trim()) continue
           const value = JSON.parse(line) as unknown
+          trace('inbox', value)
           if (typeof value === 'string') {
             // Not into a turn an interrupt is cancelling.
             if (busy && interrupt === undefined && process.env.RELAY_STEER) steer(value)

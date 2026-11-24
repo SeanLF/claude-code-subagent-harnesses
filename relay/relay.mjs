@@ -7,8 +7,19 @@ var __export = (target, all) => {
 
 // relay/src/relay.mts
 import { spawn } from "node:child_process";
-import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { Readable, Writable } from "node:stream";
 
 // node_modules/.pnpm/@agentclientprotocol+sdk@2.9.1_zod@4.6.7/node_modules/@agentclientprotocol/sdk/dist/core/jsonrpc.js
@@ -10419,8 +10430,26 @@ function ndJsonStream2(output, input, options) {
 }
 
 // relay/src/relay.mts
-var out = (event) => process.stdout.write(`${JSON.stringify(event)}
+var tracePath = process.env.RELAY_TRACE;
+if (tracePath) {
+  try {
+    mkdirSync(dirname(tracePath), { recursive: true, mode: 448 });
+  } catch {
+  }
+}
+var trace = (kind, data) => {
+  if (!tracePath) return;
+  try {
+    appendFileSync(tracePath, `${JSON.stringify({ t: (/* @__PURE__ */ new Date()).toISOString(), kind, data })}
+`, { mode: 384 });
+  } catch {
+  }
+};
+var out = (event) => {
+  trace("out", event);
+  process.stdout.write(`${JSON.stringify(event)}
 `);
+};
 var agentPid;
 var busy = false;
 var sentPrompt = false;
@@ -10509,6 +10538,7 @@ var prompt = await new Promise((resolve) => {
   process.stdin.on("data", (chunk) => text += chunk);
   process.stdin.on("end", () => resolve(text));
 });
+trace("prompt", prompt);
 var agent = spawn(bin, args, { stdio: ["pipe", "pipe", "inherit"], detached: true });
 agentPid = agent.pid;
 agent.on("error", (error2) => fail(`could not start ${bin}: ${error2.message}`));
@@ -10793,6 +10823,7 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
       for (const line of text.slice(offset, end).split("\n")) {
         if (!line.trim()) continue;
         const value = JSON.parse(line);
+        trace("inbox", value);
         if (typeof value === "string") {
           if (busy && interrupt === void 0 && process.env.RELAY_STEER) steer(value);
           else queue.push(value);

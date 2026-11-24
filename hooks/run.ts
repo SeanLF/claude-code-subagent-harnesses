@@ -1,4 +1,4 @@
-import type { EngineInterface, Timer, TurnStepChunk, TurnUsage } from 'claude-code'
+import type { EngineInterface, ProcessSpawnRequest, Timer, TurnStepChunk, TurnUsage } from 'claude-code'
 import type { Choice } from '../types'
 import type { Norm } from './acp/norm'
 import type { Mark } from './acp/steps'
@@ -153,6 +153,15 @@ function take(s: RunState, c: Context, event: Norm): (TurnStepChunk | Mark)[] {
   }
 }
 
+// VIA_TRACE=1, for development: a run behind the relay writes a trace of its own, the prompt, every line the relay
+// printed and each inbox line, to ~/.claude/via/traces/<agent>-<time>.jsonl. pi, which runs without the relay, writes none.
+async function traced($: Pick<EngineInterface, 'clock' | 'env' | 'plugin'>, agentId: string, request: ProcessSpawnRequest) {
+  if ((await $.env.get('VIA_TRACE')) !== '1' || request.argv[1] !== `${$.plugin.root}/relay/relay.mjs`) return request
+  const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
+  if (!home) return request
+  return { ...request, env: { ...request.env, RELAY_TRACE: `${home}/.claude/via/traces/${agentId}-${await $.clock.now()}.jsonl` } }
+}
+
 export async function* run(
   w: World,
   adapter: Adapter,
@@ -190,7 +199,7 @@ export async function* run(
   let buffer = ''
   let stderr = ''
   let failure = ''
-  const child = $.process.spawn(request)
+  const child = $.process.spawn(await traced($, agentId, request))
   const pieces = child[Symbol.asyncIterator]()
   let timer: Timer | undefined
   let stopped: 'limit' | 'abort' | undefined
