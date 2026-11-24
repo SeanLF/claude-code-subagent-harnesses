@@ -941,3 +941,69 @@ test('a /compact turn shows the compaction as a row and answers that it compacte
   expect(chunks.some((c) => c.kind === 'input' && JSON.parse(c.json).kind === 'compact')).toBe(true)
   expect(result.answer).toBe('Compacted the conversation.\n\n— answered by codex, gpt-6-luna')
 })
+
+// Claude Code gives a hook ten seconds of its own time (HookBudget). A wait on its own $ call is not its own time;
+// a wait on a read another hook started appears to be (inferred, not documented): after a Codex question, the step call that followed waited on the
+// read the question's hook left pending, and was refused at 10 s (2026-11-23, a lint then a typecheck). So a step
+// call waits on a silent harness only through the engine's bounded wait ($.viaSteps.wait, 5 s), whoever started the read.
+// Says each timed wait via asks for, from beside it: the test's own on already answers clock.after (mock.clock),
+// and an inline plugin shares nothing with the test file, so it says each one as a write the test records.
+const COUNTER = {
+  name: 'wait-counter',
+  register(on: TestOn) {
+    on('clock.after', async ($, e, next) => {
+      await $.fs.write('/wait', `${e.ms}`)
+      return next(e)
+    })
+  },
+}
+
+test(
+  'a command that runs silent past the hook budget is waited on through the bounded engine wait',
+  { plugins: [COUNTER] },
+  async ($, on) => {
+    const spawns: Spawn[] = []
+    let finish!: () => void
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const started = lines(CAPTURED.slice(0, 7))
+    const ended = lines([
+      {
+        sessionId: SID,
+        update: { toolCallId: 'exec-b50f', status: 'completed', rawOutput: { stdout: 'done\n' }, sessionUpdate: 'tool_call_update' },
+      },
+      chunk('msg_b', 'It finished.'),
+      { relay: 'prompt_done', stopReason: 'end_turn', usage: null },
+      { relay: 'done', stopReason: 'end_turn' },
+    ])
+    const writes: Write[] = []
+    const waitsSoFar = () => writes.filter((w) => w.path === '/wait' && w.text === '5000').length
+    const { clock } = arrange(on, spawns, { stdout: ended }, { writes, pause: { first: started, until: finished } })
+    await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'run the long command' })
+    const first = await run($)
+    const tool = first.chunks.find((c) => c.kind === 'tool')
+    expect(tool?.kind === 'tool' && tool.name).toBe('mcp__plugin_via_step__step')
+    let answered = false
+    const call = $.tool
+      .call({
+        tool: 'mcp__plugin_via_step__step',
+        tool_use_id: tool?.kind === 'tool' ? tool.id : '',
+        kind: 'execute',
+        title: 'sleep 33',
+      } as never)
+      .then((r) => {
+        answered = true
+        return r
+      })
+    await clock.settle()
+    const before = waitsSoFar()
+    // Thirty seconds of silence: three times the hook's budget.
+    for (let s = 0; s < 6; s += 1) await clock.advance(5_000)
+    expect(answered).toBe(false)
+    expect(waitsSoFar() - before).toBeGreaterThanOrEqual(6)
+    finish()
+    expect(await call).not.toHaveProperty('deny')
+    expect(JSON.stringify(await call)).toContain('done')
+  },
+)
