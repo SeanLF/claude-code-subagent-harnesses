@@ -170,7 +170,12 @@ test('a tool call joins the read an earlier step left pending, in order', async 
     void Promise.resolve().then(wake)
     return { cancel: () => {} }
   })
-  const answer = steps.answerCall(world, 'toolu_one', new AbortController().signal)
+  const answer = steps.answerCall(world, 'toolu_one', new AbortController().signal, (agentId, turnId) =>
+    steps.waitStep(world, agentId, turnId, (wake) => {
+      void Promise.resolve().then(wake)
+      return { cancel: () => {} }
+    }),
+  )
   await settle()
   release()
   expect(await answer).toEqual({ result: 'first' })
@@ -197,4 +202,35 @@ test('a read that threw ends its step with an explicit answer, and is not kept',
   expect(first.answer).toContain('could not be followed')
   const second = await finish(steps.pump(world, job, { ...event, index: 1 }, new AbortController().signal, never))
   expect(second.stopReason).toBe('end_turn')
+})
+
+// A harness command that runs past the hook's ten-second budget (a lint then a typecheck in one call) must be
+// followed through the engine's bounded wait, not one unbounded read inside the tool.call hook.
+test('a tool call waits on a silent harness through the bounded wait, and a failed wait answers it', async () => {
+  const job: steps.Job = {
+    turnId: 't1',
+    count: 0,
+    abort: new AbortController(),
+    outputs: new Map(),
+    held: [],
+    gen: (async function* () {
+      await new Promise<never>(() => {})
+      return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+    })(),
+  }
+  const world: steps.Steps = {
+    tool: 'mcp__plugin_via_step__step',
+    spawns: new Map(),
+    jobs: new Map([['fixture', job]]),
+    calls: new Map([['toolu_one', { agentId: 'fixture', id: 'one' }]]),
+  }
+  let waits = 0
+  const wait = () => {
+    waits += 1
+    return waits < 3 ? Promise.resolve() : Promise.reject(new Error('engine wait failed'))
+  }
+  const answer = await steps.answerCall(world, 'toolu_one', new AbortController().signal, wait)
+  expect(waits).toBe(3)
+  expect(answer).toEqual({ result: 'The harness run could not be followed: its producer or its wait failed.' })
+  expect(job.abort.signal.aborted).toBe(true)
 })

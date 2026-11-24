@@ -254,6 +254,7 @@ export async function answerCall(
   w: Steps,
   toolUseId: string | undefined,
   signal: AbortSignal,
+  wait: (agentId: string, turnId: string) => Promise<void>,
 ): Promise<{ result: string; isError?: true } | { deny: string }> {
   const ref = toolUseId === undefined ? undefined : w.calls.get(toolUseId)
   const job = ref === undefined ? undefined : w.jobs.get(ref.agentId)
@@ -268,18 +269,31 @@ export async function answerCall(
         return done.failed ? { result: done.output || 'failed', isError: true } : { result: done.output || NO_OUTPUT }
       }
       if (job.final !== undefined || halted(job)) return { result: 'The harness run ended before this call finished.' }
-      let r: IteratorResult<TurnStepChunk | Mark, TurnStepResult>
-      try {
-        r = await read(job)
-      } catch {
-        // The producer failed: end the run and answer the call, rather than fail the tool-call hook.
+      // Bounded, as in pump: a harness command can run past the hook's ten-second budget, so the hook
+      // waits through the engine's wait and reads only once a chunk has arrived. A failed read or wait
+      // ends the run and answers the call, rather than fail the tool-call hook.
+      const arrived = await Promise.race([
+        read(job).then(
+          () => true,
+          () => undefined,
+        ),
+        wait(ref.agentId, job.turnId).then(
+          () => false,
+          () => undefined,
+        ),
+      ])
+      if (arrived === undefined) {
         job.abort.abort()
         job.final ??= { ...ended(job.turnId), answer: NOT_FOLLOWED }
+        void job.gen.return(undefined as never).catch(() => {})
         return { result: NOT_FOLLOWED }
       }
+      if (!arrived) continue
+      const r = await read(job)
       job.reading = undefined
       if (r.done) {
-        job.final = r.value
+        // A generator ended from outside returns nothing: without a final, this loop would spin.
+        job.final = r.value ?? ended(job.turnId)
         continue
       }
       if (r.value.kind === 'call-end') job.outputs.set(r.value.id, { output: r.value.output, failed: r.value.failed })

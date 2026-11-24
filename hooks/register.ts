@@ -309,7 +309,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: STEP as 'Bash' }, ($, e, next) =>
     e.tool_use_id !== undefined && world.calls.get(e.tool_use_id)?.question
       ? answerQuestion($, world, e.tool_use_id, () => next(e))
-      : answerCall(world, e.tool_use_id, next.signal),
+      : answerCall(world, e.tool_use_id, next.signal, (agentId, turnId) => $.viaSteps.wait({ agentId, turnId })),
   ).catch(() => ({
     deny: 'via could not report this harness tool call.',
   }))

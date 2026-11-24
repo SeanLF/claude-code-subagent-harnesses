@@ -671,7 +671,9 @@ test('an Esc that finds the run parked between steps ends the run, so its harnes
   }
   const esc = new AbortController()
   esc.abort()
-  expect(await answerCall(w, 'toolu_1', esc.signal)).toEqual({ result: 'The harness run ended before this call finished.' })
+  expect(await answerCall(w, 'toolu_1', esc.signal, () => new Promise<void>(() => {}))).toEqual({
+    result: 'The harness run ended before this call finished.',
+  })
   await Promise.resolve()
   expect(cleaned).toBe(true)
   // A step that still reads the ended run ends the turn, never spins on it.
