@@ -10627,7 +10627,9 @@ if (bin === void 0) fail("usage: relay.mjs -- <agent command...>");
 var policy = process.env.RELAY_POLICY ?? "deny";
 if (!["allow", "deny", "ask"].includes(policy)) fail(`RELAY_POLICY must be allow, deny or ask, not ${policy}`);
 var cwd = process.cwd();
+var forget = process.env.RELAY_DELETE;
 var prompt = await new Promise((resolve) => {
+  if (forget) return resolve("");
   let text = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => text += chunk);
@@ -10801,6 +10803,20 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
     protocolVersion: PROTOCOL_VERSION,
     clientCapabilities: CAPABILITIES
   });
+  if (forget) {
+    const offered = init.agentCapabilities?.sessionCapabilities;
+    const how = offered?.archive ? "archived" : offered?.delete ? "deleted" : void 0;
+    if (how === void 0) return fail("the agent offers no way to delete or archive a session");
+    const gone = await ctx.request(how === "archived" ? methods.agent.session.archive : methods.agent.session.delete, { sessionId: forget }).then(
+      () => false,
+      (error2) => {
+        if (error2?.code === -32002) return true;
+        return fail(`could not ${how === "archived" ? "archive" : "delete"} the session: ${reason(error2)}`);
+      }
+    );
+    out({ relay: "forgotten", sessionId: forget, how: gone ? "gone" : how });
+    return stop(0);
+  }
   const resume = process.env.RELAY_SESSION;
   const opened = resume ? await ctx.request(methods.agent.session.load, { sessionId: resume, cwd, mcpServers: [] }).catch((error2) => {
     const message = reason(error2);

@@ -42,6 +42,23 @@ export type Adapter = {
   readonly relay?: {
     readonly install?: { readonly dir: string; readonly package: string; readonly files: readonly string[]; readonly entry: string }
   }
+  // The agents tool's open: the command that opens a via agent's session in the harness's own UI, run from the
+  // folder the agent ran in. midRun: safe while via's run holds the session. service: a background service that
+  // must already be running, or opening would start one.
+  readonly reopen?: {
+    argv(session: string): readonly string[]
+    readonly midRun: boolean
+    readonly note?: string
+    readonly service?: { readonly argv: readonly string[]; running(stdout: string): boolean; readonly why: string }
+  }
+  // The session's id where via names it (pi's), rather than the harness issuing one.
+  sessionOf?(agentId: string): string
+  // The agents tool's forget: a run of the relay's RELAY_DELETE for the session, which the relay refuses when the
+  // harness offers no delete. note: what the harness does with a deleted session. Absent: none to call.
+  readonly forget?: {
+    request(c: { root: string; session: string; installed?: string }): { argv: readonly string[]; env: Record<string, string> }
+    readonly note?: string
+  }
   start(c: {
     choice: Choice
     prompt: string

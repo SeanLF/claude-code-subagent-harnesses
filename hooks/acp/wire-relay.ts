@@ -44,6 +44,8 @@ export type RelayLine =
   // A question no answer will settle now (an interrupt, the agent withdrew it): the person need not answer.
   | { readonly relay: 'question_closed'; readonly id: string }
   | { readonly relay: 'agent_exit'; readonly code: number | null }
+  // RELAY_DELETE's one outcome: the session archived where the agent offers that, else deleted; gone: an archive found no such session.
+  | { readonly relay: 'forgotten'; readonly sessionId: string; readonly how: 'archived' | 'deleted' | 'gone' }
   | { readonly relay: 'error'; readonly message: string }
   | { readonly relay: 'done'; readonly stopReason: string | null }
 

@@ -12,6 +12,10 @@ export type AgentRecord = {
   description?: string // the spawn's Agent description
   choice?: Choice // the model, tools, thinking and config its prompts asked for
   session?: string // the harness's session, which its next turn resumes
+  cwd?: string // the folder its harness runs in: the Claude Code session's, at the spawn
+  // A run holds the session until then (ms), in this or another Claude Code session: its own timeout and a minute
+  // past it, renewed by each run an interrupt starts, so a session that died mid-run can't hold its agent forever.
+  runningUntil?: number
   report?: string // its last answer
   handedBack?: boolean // that answer has gone back
   // Made up in this process for an agent with no record it could read (spawned before via loaded, evicted, or
@@ -102,4 +106,39 @@ export function updateRecord(w: Records, $: Store, agentId: string, change: Part
   if (held.rebuilt) return Promise.resolve()
   const snapshot = stored(held)
   return persist(w, $, () => $.store.set(keyOf(agentId), snapshot))
+}
+
+// A record as the store holds it now, after this process's own writes: another Claude Code session may have
+// changed it since this one read it (its session, a run's mark). Memory only for one never stored (rebuilt).
+export async function freshRecord(w: Records, $: Store, agentId: string): Promise<AgentRecord | undefined> {
+  await w.writing
+  const stored = await $.store.get(keyOf(agentId)).catch(() => undefined)
+  return isRecord(stored) ? stored : w.records.get(agentId)
+}
+
+// The stored agents, newest first: the index is in spawn order. An id whose record is gone is skipped. Read
+// fresh, and not kept in memory, where a step would take them over another session's later changes.
+export async function listRecords(w: Records, $: Store): Promise<[string, AgentRecord][]> {
+  await w.writing
+  const listed = await $.store.get(INDEX)
+  const ids = Array.isArray(listed) ? listed.filter((id): id is string => typeof id === 'string') : []
+  const found = await Promise.all(ids.map(async (id) => [id, await $.store.get(keyOf(id)).catch(() => undefined)] as const))
+  return found.flatMap(([id, record]) => (isRecord(record) ? [[id, record] as [string, AgentRecord]] : [])).reverse()
+}
+
+// An agent forgotten: gone from memory, the index and the store, after any write in flight. Rejects when the
+// store refuses, so the person is told; the queue goes on either way.
+export function forgetRecord(w: Records, $: Store, agentId: string): Promise<void> {
+  w.records.delete(agentId)
+  const done = (w.writing ?? Promise.resolve()).then(async () => {
+    const listed = await $.store.get(INDEX)
+    if (Array.isArray(listed))
+      await $.store.set(
+        INDEX,
+        listed.filter((id) => id !== agentId),
+      )
+    await $.store.delete(keyOf(agentId))
+  })
+  w.writing = done.catch(() => undefined)
+  return done
 }

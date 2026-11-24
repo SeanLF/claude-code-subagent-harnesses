@@ -131,7 +131,7 @@ const HALF = [
 ]
 
 export function hang(on: TestOn, spawns: Spawn[], writes?: Write[], env: Record<string, string> = ENV, events: unknown[] = HALF) {
-  bottom(on, writes, env)
+  const store = bottom(on, writes, env)
   on('session.messages', () => ({ value: [] }))
   on('process.spawn', async function* (_, e, next) {
     spawns.push({ argv: [...e.argv], input: e.input, env: e.env })
@@ -142,6 +142,7 @@ export function hang(on: TestOn, spawns: Spawn[], writes?: Write[], env: Record<
     })
     return { value: { code: 0, signal: null } }
   })
+  return store
 }
 
 export function hold(on: TestOn, spawns: Spawn[], writes: Write[], before: unknown[], after: unknown[], env: Record<string, string> = ENV) {

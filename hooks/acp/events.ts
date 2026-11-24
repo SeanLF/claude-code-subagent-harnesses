@@ -468,6 +468,8 @@ export function relayEvents(from = 'the agent'): (line: string) => Norm[] {
       case 'session_lost':
       case 'agent_exit':
       case 'done':
+      // RELAY_DELETE's own line, which a run never prints: the agents tool reads it (hooks/agents.ts).
+      case 'forgotten':
         return []
       default:
         return unknownKind(e)

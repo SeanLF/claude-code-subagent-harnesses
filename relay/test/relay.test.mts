@@ -525,3 +525,35 @@ test("a resumed session's replayed bytes are not saved again: only what comes af
   )
   assert.equal(readdirSync(files).length, 1)
 })
+
+test('RELAY_DELETE deletes that session and nothing else: no new session, no prompt', async () => {
+  const log = logFile()
+  const run = await fake({ RELAY_DELETE: 's9', FAKE_DELETE: '1', FAKE_LOG: log, FAKE_ECHO: '1' })
+  assert.deepEqual(logged(log), ['delete s9'])
+  assert.deepEqual(relayEvent(run.events, 'forgotten'), { relay: 'forgotten', sessionId: 's9', how: 'deleted' })
+  assert.equal(updates(run.events).length, 0)
+  assert.equal(run.status, 0)
+})
+
+test('RELAY_DELETE archives the session where the agent offers that, rather than deleting it', async () => {
+  const log = logFile()
+  const run = await fake({ RELAY_DELETE: 's9', FAKE_DELETE: 'archive', FAKE_LOG: log })
+  assert.deepEqual(logged(log), ['archive s9'])
+  assert.equal(relayEvent(run.events, 'forgotten')?.how, 'archived')
+  assert.equal(run.status, 0)
+})
+
+test('RELAY_DELETE archiving a session the agent no longer has says it is gone, which is not a failure', async () => {
+  const run = await fake({ RELAY_DELETE: 's9', FAKE_DELETE: 'gone' })
+  assert.equal(relayEvent(run.events, 'forgotten')?.how, 'gone')
+  assert.equal(run.status, 0)
+})
+
+test('RELAY_DELETE fails, touching nothing, when the agent offers no way to delete a session', async () => {
+  const log = logFile()
+  const run = await fake({ RELAY_DELETE: 's9', FAKE_LOG: log, FAKE_CLOSE: 'resume' })
+  assert.equal(errorOf(run.events), 'the agent offers no way to delete or archive a session')
+  assert.equal(relayEvent(run.events, 'forgotten'), undefined)
+  assert.deepEqual(logged(log), [])
+  assert.equal(run.status, 1)
+})

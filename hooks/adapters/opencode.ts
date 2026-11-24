@@ -1,6 +1,6 @@
 import type { Choice } from '../../types'
 import { relayEvents, sessionLost } from '../acp/events'
-import { type AcpSpec, acpMode, acpStart, type Policy } from '../acp/spec'
+import { type AcpSpec, acpForget, acpMode, acpStart, type Policy } from '../acp/spec'
 import type { Adapter, Mode } from '../adapter'
 
 // Read-only is a deny-by-default agent: opencode removes denied tools from what the model is offered
@@ -84,6 +84,20 @@ export const opencode = {
       ...(run.agent ? { config: { mode: run.agent }, env: { ...injected, OPENCODE_DISABLE_PROJECT_CONFIG: '1' } } : {}),
     })
   },
+  // The TUI follows the background service, whose live events are per process: opened mid-run it stops at the
+  // first command (#74). With no service running, opening starts one, which resumes any OpenCode run then live as
+  // if its owner died (anomalyco/opencode#51213). `service status` reports without starting one.
+  reopen: {
+    argv: (session) => ['opencode', '-s', session],
+    midRun: false,
+    note: 'Open it with the same opencode version as the running service: another version replaces the service, and the new one resumes any OpenCode run then in progress (anomalyco/opencode#51213).',
+    service: {
+      argv: ['opencode', 'service', 'status'],
+      running: (stdout) => /^https?:\/\//.test(stdout.trim()),
+      why: "OpenCode's background service is not running, and opening the session would start one, which resumes any OpenCode run then in progress as a second owner (anomalyco/opencode#51213). Start it first with `opencode service start`, between runs.",
+    },
+  },
+  forget: { request: ({ root, session }) => acpForget(OPENCODE, { root, session }) },
   events: () => relayEvents('opencode'),
   // The relay names the model the session runs on.
   model: () => undefined,

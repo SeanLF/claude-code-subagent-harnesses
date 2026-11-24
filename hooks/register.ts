@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { drawCall, drawGroup } from './acp/render'
 import { answerCall, CHILD_CALL, endJob, SEND_CALL, STEP_CALL, waitStep } from './acp/steps'
 import type { Adapter } from './adapter'
+import { AGENTS_SPEC, agentsCall } from './agents'
 import { waitChild, woken } from './children'
 import { respond, textChunks } from './handback'
 import { HARNESSES } from './harnesses'
@@ -77,6 +78,8 @@ export function unwrapped(text: string): string {
 
 // The tool of the server plugin.json declares as `step`, named as Claude Code names a plugin's server.
 const STEP = 'mcp__plugin_via_step__step'
+// The agents tool, as Claude Code names a tool a plugin registers: mcp__<plugin>__<name>.
+const AGENTS = 'mcp__via__agents'
 
 const CLAUDE = /claude|opus|sonnet|haiku|fable/i
 const KEPT = 4
@@ -170,6 +173,10 @@ export const register: Register = (on, options) => {
     // Each harness tool call reaches Claude Code as a call to this tool, served by mcp/step.mts, which
     // runs nothing: its tool.call hook answers with what the harness reported. Bash would look the same,
     // but a hook that fails is skipped and the real command would run; a call nobody answers fails.
+    // One tool for via's agents on record: list, open, forget. Deferred, so it costs a request nothing until wanted.
+    await $.tool
+      .register({ ...AGENTS_SPEC, isDeferred: true })
+      .catch((error: unknown) => $.ui.log(`via could not add its agents tool: ${String(error)}`))
     for (const adapter of world.adapters.values()) {
       if (!(await onPath($, adapter.bin))) continue
       const models = await cachedModels($, adapter, world.defaultModel)
@@ -273,11 +280,13 @@ export const register: Register = (on, options) => {
       // allows Claude itself, which a harness maps to its own modes.
       // A resume, or a teammate brought back, is the same agent: its session, choice and answer stay, and only
       // the spawn's terms are new.
+      // cwd: where its harness runs and keeps the session, which the agents tool opens it in; a resume keeps the first.
       const terms = { harness: adapter.name, handback: handsBack(e), mode: e.permissionMode ?? 'default' }
+      const cwd = await $.session.cwd().catch(() => undefined)
       const kept = await recordOf(world, $, started.agentId)
       if (kept !== undefined && !kept.rebuilt)
-        await updateRecord(world, $, started.agentId, { ...terms, description: e.description || kept.description })
-      else await createRecord(world, $, started.agentId, { ...terms, description: e.description })
+        await updateRecord(world, $, started.agentId, { ...terms, description: e.description || kept.description, cwd: kept.cwd ?? cwd })
+      else await createRecord(world, $, started.agentId, { ...terms, description: e.description, cwd })
     }
     return started
   })
@@ -334,6 +343,8 @@ export const register: Register = (on, options) => {
   ).catch(() => ({
     deny: 'via could not report this harness tool call.',
   }))
+  // The tool registered at session.start.
+  on('tool.call', { tool: AGENTS as 'Bash' }, ($, e) => agentsCall($, world, e as { action?: unknown; agent?: unknown }))
   // The dialog answerQuestion opens shows the harness's questions.
   on('tool.call', { tool: 'AskUserQuestion' }, ($, e, next) => showQuestions(world, $, e, next))
 

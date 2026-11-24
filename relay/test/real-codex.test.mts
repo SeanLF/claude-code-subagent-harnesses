@@ -282,3 +282,17 @@ test('a shell command an interrupt leaves running ends with the run, leaving no 
   assert.match(JSON.stringify(fake.requests.at(-1)?.input), /Stop\. Reply with only the word REDIRECTED\./)
   assert.equal(answer(run.events), 'REDIRECTED')
 })
+
+test('RELAY_DELETE has Codex archive the session, so resuming it afterwards is refused until it is unarchived', { skip }, async () => {
+  const b = box()
+  fake.enqueue(textResponse('PONG'))
+  const first = await codex(b, 'Reply with only the word PONG.')
+  assert.equal(first.status, 0, first.stderr)
+  const sessionId = sessionOf(first.events)
+  const deleted = await codex(b, '', { RELAY_DELETE: sessionId })
+  assert.equal(deleted.status, 0, deleted.stderr)
+  assert.deepEqual(relayEvent(deleted.events, 'forgotten'), { relay: 'forgotten', sessionId, how: 'deleted' })
+  const again = await codex(b, 'What did you reply?', { RELAY_SESSION: sessionId })
+  // codex-acp's delete is Codex's archive: the session is kept, and `codex unarchive` brings it back.
+  assert.ok(relayEvent(again.events, 'error')?.message.includes(`is archived. Run \`codex unarchive ${sessionId}\``), again.stderr)
+})

@@ -112,6 +112,10 @@ export const pi = {
   thinking: THINKING,
   steer: true,
   defaultModel: true,
+  sessionOf: (agentId) => `pi-${agentId}`,
+  // pi resumes a session in its own working folder (docs/cli.md). Between runs only: a second pi on the session is a
+  // second writer of its file. pi has no delete to call: its /resume picker deletes sessions.
+  reopen: { argv: (session) => ['pi', '--session', session], midRun: false },
   start: ({ choice, prompt, agentId, root, inbox }) => ({
     argv: [
       'pi',

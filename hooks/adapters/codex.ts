@@ -1,7 +1,7 @@
 import type { Choice } from '../../types'
 import { relayEvents, sessionLost } from '../acp/events'
 import { isRecord } from '../acp/json'
-import { type AcpMode, type AcpSpec, acpMode, acpStart } from '../acp/spec'
+import { type AcpMode, type AcpSpec, acpForget, acpMode, acpStart } from '../acp/spec'
 import type { Adapter, Mode } from '../adapter'
 
 // Read-only is the one mode via defends. Otherwise codex works in its workspace sandbox and asks before
@@ -110,6 +110,17 @@ export const codex = {
       command: ['node', installed],
       ...(readOnly ? { env: guard } : {}),
     })
+  },
+  // Codex keeps its sessions in its own history, and its writer lock refuses a second writer, so the TUI is safe
+  // to open even while via's run holds the session.
+  reopen: { argv: (session) => ['codex', 'resume', session], midRun: true },
+  // codex-acp's delete is Codex's archive (seen on 2.10.0: resuming it then says to unarchive it first).
+  forget: {
+    request: ({ root, session, installed }) => {
+      if (installed === undefined) throw new Error('codex-acp is not installed')
+      return acpForget(CODEX, { root, session, command: ['node', installed] })
+    },
+    note: 'Codex keeps it archived: `codex unarchive <session>` brings it back.',
   },
   events: () => relayEvents('codex'),
   // The relay names the model the session runs on.

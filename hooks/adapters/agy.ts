@@ -41,6 +41,10 @@ export const agy = {
   // The prompt goes as text: a leading / is not run as a command over ACP (tested live on 1.5.7 and 1.5.16).
   start: ({ choice, prompt, session, root, inbox, files, mode }) =>
     acpStart(AGY, { root, prompt, readOnly: false, mode, inbox, files, session, model: choice.model, thinking: choice.thinking }),
+  // Its ACP session id is its conversation id (the same file under ~/.gemini/antigravity-cli/conversations).
+  // Between runs only: whether a second agy may open a conversation another one is writing is untested. agy
+  // offers no session delete over ACP (1.5.16), so it has no forget.
+  reopen: { argv: (session) => ['agy', '--conversation', session], midRun: false },
   events: () => {
     const read = relayEvents('agy')
     const commands = new Set<string>()

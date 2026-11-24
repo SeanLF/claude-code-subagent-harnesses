@@ -9,7 +9,9 @@
 // command before it answers, then answers with the option the relay chose. FAKE_QUESTION (form or url) asks the person
 // one question before it answers, then answers with what came back; FAKE_QUESTION_URL is the link it asks to open;
 // FAKE_WITHDRAW withdraws the question ($/cancel_request) as soon as it is asked. FAKE_IMAGE answers with an image,
-// and a resumed session replays one; FAKE_IMAGE=message sends one in a message to a subagent.
+// and a resumed session replays one; FAKE_IMAGE=message sends one in a message to a subagent. FAKE_DELETE advertises
+// session/delete (1), or with `archive` session/archive and list too, or with `gone` an archive that finds no such
+// session; each delete, archive and new session is logged.
 import { appendFileSync } from 'node:fs'
 import { Readable, Writable } from 'node:stream'
 // The unstable schema, as codex-acp's: the stable one has no plan capability and drops it.
@@ -47,7 +49,13 @@ await acp
   .onRequest(acp.methods.agent.initialize, (ctx) => {
     offered = ctx.params.clientCapabilities
     const closing = process.env.FAKE_CLOSE === 'resume' ? { close: {}, resume: {} } : process.env.FAKE_CLOSE === '1' ? { close: {} } : {}
-    const sessionCapabilities = process.env.FAKE_TITLE ? { ...closing, title: {} } : closing
+    const titled = process.env.FAKE_TITLE ? { ...closing, title: {} } : closing
+    const forgets = process.env.FAKE_DELETE
+    const sessionCapabilities = !forgets
+      ? titled
+      : forgets === 'archive' || forgets === 'gone'
+        ? { ...titled, list: {}, archive: {}, delete: {} }
+        : { ...titled, delete: {} }
     return {
       protocolVersion: ctx.params.protocolVersion,
       agentCapabilities: { loadSession: true, promptCapabilities: { image: echo }, sessionCapabilities },
@@ -61,9 +69,19 @@ await acp
       })
     return {}
   })
-  .onRequest(acp.methods.agent.session.new, () =>
-    process.env.FAKE_OPTIONS ? { sessionId: 's1', configOptions: OPTIONS } : { sessionId: 's1' },
-  )
+  .onRequest(acp.methods.agent.session.new, () => {
+    if (process.env.FAKE_DELETE) log('new')
+    return process.env.FAKE_OPTIONS ? { sessionId: 's1', configOptions: OPTIONS } : { sessionId: 's1' }
+  })
+  .onRequest(acp.methods.agent.session.delete, (ctx) => {
+    log(`delete ${ctx.params.sessionId}`)
+    return {}
+  })
+  .onRequest(acp.methods.agent.session.archive, (ctx) => {
+    if (process.env.FAKE_DELETE === 'gone') throw acp.RequestError.resourceNotFound(ctx.params.sessionId)
+    log(`archive ${ctx.params.sessionId}`)
+    return {}
+  })
   .onRequest(acp.methods.agent.session.setMode, (ctx) => {
     if (process.env.FAKE_REFUSE === '1') throw acp.RequestError.invalidParams(`no mode ${ctx.params.modeId} here; try workspace-write`)
     log(`mode ${ctx.params.modeId}`)

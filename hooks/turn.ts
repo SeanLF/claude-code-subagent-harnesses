@@ -306,7 +306,28 @@ type Drive = {
   signal: AbortSignal
 }
 
+// So another Claude Code session's agents tool sees this run (hooks/agents.ts): until this session's own timeout, and
+// a minute's grace, from now; set again for each run an interrupt starts. Best effort: a clock that fails leaves the
+// run unmarked, never the run unstarted.
+async function holdUntil(w: World, $: EngineInterface, agentId: string): Promise<void> {
+  const now = await Promise.resolve()
+    .then(() => $.clock.now())
+    .catch(() => undefined)
+  if (now !== undefined) await updateRecord(w, $, agentId, { runningUntil: now + (w.timeoutMinutes + 1) * 60_000 })
+}
+
+// The run's mark on its record goes when it ends, however it ends; one this process never clears (it died) lapses
+// on its own, as no run outlives timeoutMinutes.
 async function* drive(w: World, $: EngineInterface, d: Drive): AsyncGenerator<TurnStepChunk | Mark, TurnStepResult> {
+  await holdUntil(w, $, d.agentId)
+  try {
+    return yield* driveRun(w, $, d)
+  } finally {
+    await updateRecord(w, $, d.agentId, { runningUntil: undefined }).catch(() => undefined)
+  }
+}
+
+async function* driveRun(w: World, $: EngineInterface, d: Drive): AsyncGenerator<TurnStepChunk | Mark, TurnStepResult> {
   const { adapter, e, turn, agentId, record, chosen, mode, installed, guard, signal } = d
   let prompt = d.prompt
   let block = 0
@@ -337,6 +358,7 @@ async function* drive(w: World, $: EngineInterface, d: Drive): AsyncGenerator<Tu
     if (signal.aborted) return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], '')
     prompt = result.next
     block = result.block
+    await holdUntil(w, $, agentId)
   }
   if (result.aborted) return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], '')
   // The run has answered: a transcript that cannot be read must not cost the answer.

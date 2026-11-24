@@ -189,3 +189,16 @@ test('an interrupt during a shell command ends the command, leaving no process b
   assert.equal(answer(run.events), 'REDIRECTED')
   assert.match(JSON.stringify(fake.requests.at(-1)?.messages), /Stop\. Reply with only the word REDIRECTED\./)
 })
+
+test('RELAY_DELETE deletes the session, so resuming it afterwards finds it lost', { skip }, async () => {
+  const b = box()
+  fake.enqueue(chatText('PONG'))
+  const first = await opencode(b, 'Reply with only the word PONG.')
+  assert.equal(first.status, 0, first.stderr)
+  const sessionId = sessionOf(first.events)
+  const deleted = await opencode(b, '', { RELAY_DELETE: sessionId })
+  assert.equal(deleted.status, 0, deleted.stderr)
+  assert.deepEqual(relayEvent(deleted.events, 'forgotten'), { relay: 'forgotten', sessionId, how: 'deleted' })
+  const again = await opencode(b, 'What did you reply?', { RELAY_SESSION: sessionId })
+  assert.ok(relayEvent(again.events, 'session_lost'), again.stderr)
+})

@@ -74,6 +74,14 @@ export function acpMode(spec: AcpSpec, readOnly: boolean, mode: Mode): AcpMode {
   return spec.modes.default
 }
 
+// The relay's RELAY_DELETE for one session of the agent: no session opened, no prompt.
+export function acpForget(
+  spec: AcpSpec,
+  c: { root: string; session: string; command?: readonly string[] },
+): { argv: readonly string[]; env: Record<string, string> } {
+  return { argv: relayArgv(c.root, c.command ?? spec.command), env: { RELAY_DELETE: c.session, ...(spec.env ?? {}) } }
+}
+
 export function acpStart(spec: AcpSpec, run: AcpRun): ProcessSpawnRequest {
   const { agentMode, policy } = acpMode(spec, run.readOnly, run.mode)
   const config = { ...(run.config ?? {}), ...(run.thinking && spec.thinking ? { [spec.thinking]: run.thinking } : {}) }

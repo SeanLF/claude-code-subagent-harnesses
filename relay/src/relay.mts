@@ -20,6 +20,8 @@
 //   RELAY_TRACE       for development: a file the relay appends the prompt, its printed lines and inbox lines to
 //   RELAY_POLICY      how permission requests are answered: allow, deny (the default) or ask (every request
 //                     goes to the plugin)
+//   RELAY_DELETE      a session to forget, and nothing else: no session is opened and no prompt read. Archived
+//                     where the agent offers that, else deleted; {"relay":"forgotten"} says which, or that it was gone
 import { spawn } from 'node:child_process'
 import {
   appendFileSync,
@@ -183,7 +185,9 @@ const policy = (process.env.RELAY_POLICY ?? 'deny') as Policy
 if (!['allow', 'deny', 'ask'].includes(policy)) fail(`RELAY_POLICY must be allow, deny or ask, not ${policy}`)
 const cwd = process.cwd()
 
+const forget = process.env.RELAY_DELETE
 const prompt = await new Promise<string>((resolve) => {
+  if (forget) return resolve('')
   let text = ''
   process.stdin.setEncoding('utf8')
   process.stdin.on('data', (chunk: string) => (text += chunk))
@@ -402,6 +406,24 @@ const result = await acp
       protocolVersion: acp.PROTOCOL_VERSION,
       clientCapabilities: CAPABILITIES,
     })
+    if (forget) {
+      const offered = init.agentCapabilities?.sessionCapabilities
+      const how = offered?.archive ? 'archived' : offered?.delete ? 'deleted' : undefined
+      if (how === undefined) return fail('the agent offers no way to delete or archive a session')
+      const gone = await ctx
+        .request(how === 'archived' ? acp.methods.agent.session.archive : acp.methods.agent.session.delete, { sessionId: forget })
+        .then(
+          () => false,
+          (error: unknown) => {
+            // -32002: ACP's resource not found, for a session the agent no longer has. Only an archive rejects with
+            // it: the SDK resolves a delete of a missing session, as deleting is idempotent.
+            if ((error as { code?: unknown })?.code === -32002) return true
+            return fail(`could not ${how === 'archived' ? 'archive' : 'delete'} the session: ${reason(error)}`)
+          },
+        )
+      out({ relay: 'forgotten', sessionId: forget, how: gone ? 'gone' : how })
+      return stop(0)
+    }
     const resume = process.env.RELAY_SESSION
     const opened = resume
       ? await ctx.request(acp.methods.agent.session.load, { sessionId: resume, cwd, mcpServers: [] }).catch((error: unknown) => {

@@ -67,6 +67,14 @@ Ask in plain language: "Have codex review src/api". Optional lines at the top of
 
 A message to a running Codex, OpenCode, agy or pi agent reaches it at its next step; `interrupt:` first stops the current step. That holds for Claude's SendMessage; one you type into the agent's view waits in Claude Code until the current step ends, so it can't cut a long command short. A harness's own question for you (ACP elicitation, such as Codex's questions in its plan mode) shows in Claude Code's question dialog, whole; type under "Other" for your own text. An agent in the background adds "Let Claude answer": picking it, your `askUserQuestionTimeout` passing (`via` times it, from when the dialog opens), or a `claude -p` run sends the question to the main agent, whose SendMessage back is the answer rather than a steer, until the harness withdraws the question. A foreground agent can't: the main agent would hear only once its turn ends. A link to open, or a form the dialog can't show, uses Claude Code's form instead. A completed answer ends with the model the harness reports; one only taken from your `model:` line says `(requested)`, and a harness that won't say gets `model not reported`.
 
+### Your agents
+
+Claude has one tool for `via`'s 50 most recent agents, across sessions and projects: ask "which via agents do I have?", "open that codex run in a pane" or "forget the old opencode agents".
+
+- **list:** each agent's harness, title, whether it's running (in any Claude Code session), and the command that opens its session in the harness's own UI.
+- **open:** that command alone, run from the folder the agent worked in; Claude runs it, in a pane if it can. `codex resume <id>` works even while the agent runs. OpenCode (`opencode -s <id>`), agy (`agy --conversation <id>`) and pi (`pi --session <id>`) only between runs; OpenCode also only while its background service runs, since opening would start one (see OpenCode below).
+- **forget:** deletes the harness session and `via`'s record, once you say yes in Claude Code's dialog, and never while it runs; the agent can't be resumed after. Codex keeps a forgotten session archived (`codex unarchive <id>`). agy and pi offer `via` no way to delete a session, so their agents stay; pi's `/resume` picker deletes its own.
+
 ## Permissions
 
 - **Read-only:** Codex runs in its read-only sandbox with MCP servers and plugins off; OpenCode and pi get reading tools only.
