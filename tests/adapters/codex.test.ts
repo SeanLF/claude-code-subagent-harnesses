@@ -99,6 +99,7 @@ function arrange(
     step?: { called: Record<string, unknown>[]; result: () => unknown }
     unheld?: boolean // the stream goes on past a question without waiting for its answer
     env?: Record<string, string> // more of the person's environment, beside HOME
+    description?: string // the Agent description the spawn left in the agent's record
   } = {},
 ) {
   const clock = mock.clock(on)
@@ -107,7 +108,9 @@ function arrange(
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_, e, next) => next(e))
   on('session.messages', () => ({ value: [] }))
-  const records = agentStore(on, { a1: { harness: 'codex', mode: o.mode ?? 'default' } })
+  const records = agentStore(on, {
+    a1: { harness: 'codex', mode: o.mode ?? 'default', ...(o.description ? { description: o.description } : {}) },
+  })
   let answered!: () => void
   const answer = new Promise<void>((resolve) => {
     answered = resolve
@@ -1036,4 +1039,12 @@ test('without VIA_TRACE a codex run asks for no trace', async ($, on) => {
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'run the tests' })
   await runTurn($)
   expect(spawns[0]?.env).not.toHaveProperty('RELAY_TRACE')
+})
+
+test("a codex run hands the relay its Agent description as the new session's title", async ($, on) => {
+  const spawns: Spawn[] = []
+  arrange(on, spawns, undefined, { description: 'Review the parser' })
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'run the tests' })
+  await runTurn($)
+  expect(spawns[0]?.env?.RELAY_TITLE).toBe('Review the parser')
 })

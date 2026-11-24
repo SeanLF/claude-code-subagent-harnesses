@@ -126,6 +126,28 @@ test('a symlink or .. that leads out of the working folder stays text, and at mo
   assert.equal((await said(`See ${many.join(' ')}`, dir)).blocks.length, 1 + 4)
 })
 
+test('a new session is named RELAY_TITLE when the agent can retitle one; a resumed one, or one that cannot, is not', async () => {
+  const titled = logFile()
+  assert.equal((await fake({ FAKE_ECHO: '1', FAKE_TITLE: '1', FAKE_LOG: titled, RELAY_TITLE: 'Review the parser' })).status, 0)
+  assert.match(readFileSync(titled, 'utf8'), /^title Review the parser$/m)
+  const resumed = logFile()
+  await fake({ FAKE_ECHO: '1', FAKE_TITLE: '1', FAKE_LOG: resumed, RELAY_TITLE: 'Review the parser', RELAY_SESSION: 's1' })
+  assert.equal(existsSync(resumed) && readFileSync(resumed, 'utf8').includes('title'), false)
+  // Without the capability the relay never asks (the fake still logs a title it is sent, to show one if it were).
+  const unable = logFile()
+  assert.equal((await fake({ FAKE_ECHO: '1', FAKE_LOG: unable, RELAY_TITLE: 'Review the parser' })).status, 0)
+  assert.equal(
+    logged(unable).some((line) => line.startsWith('title')),
+    false,
+  )
+})
+
+test('a title the agent refuses never fails the run', async () => {
+  const run = await fake({ FAKE_ECHO: '1', FAKE_TITLE: 'refuse', RELAY_TITLE: 'Review the parser' })
+  assert.equal(run.status, 0)
+  assert.deepEqual(relayEventsNamed(run.events, 'done'), [{ relay: 'done', stopReason: 'end_turn' }])
+})
+
 test('a run that ends closes its session when the agent can close one, and only then', async () => {
   for (const close of ['1', '']) {
     const log = logFile()

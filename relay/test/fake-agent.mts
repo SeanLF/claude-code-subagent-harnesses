@@ -3,7 +3,7 @@
 // set it takes images and answers with what it was offered: the client's capabilities, as the SDK
 // hands them to an agent, and the prompt's block types; FAKE_STOP is the stop reason it ends with.
 // FAKE_CLOSE advertises session/close, and with `resume` session/resume too; FAKE_HANG holds the prompt until a
-// cancel, or with `stubborn` past it, or with `once` only the first prompt; FAKE_LOG names a file each cancel and close is written to. FAKE_OPTIONS offers config options, as
+// cancel, or with `stubborn` past it, or with `once` only the first prompt; FAKE_LOG names a file each cancel and close is written to. FAKE_TITLE advertises session/set_title and logs each title; with `refuse` it refuses them. FAKE_OPTIONS offers config options, as
 // codex-acp does: a model and its reasoning efforts; each set one is logged. FAKE_REFUSE refuses every config
 // option and mode, with its reason in the error's data, as testy and codex-acp do. FAKE_ASK asks permission to run a
 // command before it answers, then answers with the option the relay chose. FAKE_QUESTION (form or url) asks the person
@@ -46,8 +46,8 @@ await acp
   .agent()
   .onRequest(acp.methods.agent.initialize, (ctx) => {
     offered = ctx.params.clientCapabilities
-    const sessionCapabilities =
-      process.env.FAKE_CLOSE === 'resume' ? { close: {}, resume: {} } : process.env.FAKE_CLOSE === '1' ? { close: {} } : {}
+    const closing = process.env.FAKE_CLOSE === 'resume' ? { close: {}, resume: {} } : process.env.FAKE_CLOSE === '1' ? { close: {} } : {}
+    const sessionCapabilities = process.env.FAKE_TITLE ? { ...closing, title: {} } : closing
     return {
       protocolVersion: ctx.params.protocolVersion,
       agentCapabilities: { loadSession: true, promptCapabilities: { image: echo }, sessionCapabilities },
@@ -74,6 +74,11 @@ await acp
       throw acp.RequestError.invalidParams(`no ${ctx.params.configId} ${ctx.params.value} here; try gpt-6-luna`)
     log(`set ${ctx.params.configId}=${ctx.params.value}`)
     return { configOptions: OPTIONS }
+  })
+  .onRequest(acp.methods.agent.session.setTitle, (ctx) => {
+    if (process.env.FAKE_TITLE === 'refuse') throw acp.RequestError.invalidParams('title too long')
+    log(`title ${ctx.params.title}`)
+    return { title: ctx.params.title }
   })
   .onRequest(acp.methods.agent.session.close, () => {
     log('close')

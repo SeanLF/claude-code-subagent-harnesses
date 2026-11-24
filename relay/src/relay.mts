@@ -18,6 +18,7 @@
 //   RELAY_CONFIG      a JSON object of other config options to set, such as {"reasoning_effort": "high"}
 //   RELAY_OPTIONS     a JSON object of the person's own config options, such as {"fast-mode": "on"}: never a
 //                     mode, model or thinking option, and each checked against what the session offers
+//   RELAY_TITLE       a title for a new session (session/set_title), where the agent can retitle one
 //   RELAY_TRACE       for development: a file the relay appends the prompt, its printed lines and inbox lines to
 //   RELAY_POLICY      how permission requests are answered: allow, deny (the default) or ask (every request
 //                     goes to the plugin)
@@ -486,6 +487,11 @@ const result = await acp
     // refuses ends the run first, and a new session saved then would hold no prompt to resume. cwd: so a
     // title's paths can be shown relative to it.
     out({ relay: 'session', sessionId, cwd })
+    // A new session is named after the via agent (RELAY_TITLE, its Agent description), so the harness's own
+    // session list reads as Claude's does. Only where the agent can retitle one; a refusal changes nothing.
+    const title = process.env.RELAY_TITLE?.trim()
+    if (!resume && title && (init.agentCapabilities?.sessionCapabilities as { title?: unknown } | undefined)?.title)
+      await ctx.request(acp.methods.agent.session.setTitle, { sessionId, title }).catch(() => {})
     const current = configOptions.find((o) => o.id === 'model')
     if (current && 'currentValue' in current && typeof current.currentValue === 'string')
       out({ relay: 'model', name: current.currentValue })

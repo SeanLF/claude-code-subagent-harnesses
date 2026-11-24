@@ -153,13 +153,27 @@ function take(s: RunState, c: Context, event: Norm): (TurnStepChunk | Mark)[] {
   }
 }
 
-// VIA_TRACE=1, for development: a run behind the relay writes a trace of its own, the prompt, every line the relay
-// printed and each inbox line, to ~/.claude/via/traces/<agent>-<time>.jsonl. pi, which runs without the relay, writes none.
-async function traced($: Pick<EngineInterface, 'clock' | 'env' | 'plugin'>, agentId: string, request: ProcessSpawnRequest) {
-  if ((await $.env.get('VIA_TRACE')) !== '1' || request.argv[1] !== `${$.plugin.root}/relay/relay.mjs`) return request
-  const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
-  if (!home) return request
-  return { ...request, env: { ...request.env, RELAY_TRACE: `${home}/.claude/via/traces/${agentId}-${await $.clock.now()}.jsonl` } }
+// What via adds to a run behind the relay, beside what its adapter set:
+// - RELAY_TITLE, the agent's Agent description, which names a new session where the agent can retitle one.
+// - RELAY_TRACE, under VIA_TRACE=1 (for development): a trace of the run, the prompt, every line the relay printed
+//   and each inbox line, in ~/.claude/via/traces/<agent>-<time>.jsonl. pi, which runs without the relay, writes none.
+async function relayed(
+  $: Pick<EngineInterface, 'clock' | 'env' | 'plugin'>,
+  w: Pick<World, 'records'>,
+  agentId: string,
+  request: ProcessSpawnRequest,
+): Promise<ProcessSpawnRequest> {
+  if (request.argv[1] !== `${$.plugin.root}/relay/relay.mjs`) return request
+  const title = w.records.get(agentId)?.description
+  const home = (await $.env.get('VIA_TRACE')) === '1' ? (await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) : undefined
+  return {
+    ...request,
+    env: {
+      ...request.env,
+      ...(title ? { RELAY_TITLE: title } : {}),
+      ...(home ? { RELAY_TRACE: `${home}/.claude/via/traces/${agentId}-${await $.clock.now()}.jsonl` } : {}),
+    },
+  }
 }
 
 export async function* run(
@@ -199,7 +213,7 @@ export async function* run(
   let buffer = ''
   let stderr = ''
   let failure = ''
-  const child = $.process.spawn(await traced($, agentId, request))
+  const child = $.process.spawn(await relayed($, w, agentId, request))
   const pieces = child[Symbol.asyncIterator]()
   let timer: Timer | undefined
   let stopped: 'limit' | 'abort' | undefined

@@ -10753,8 +10753,8 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
           `${configId} is not an option a config line sets: only ones that tune the model, ${settable().length > 0 ? `such as ${settable().join(", ")}` : "and the agent offers none"}. config: ${configId}= drops it.`
         );
       if (option === void 0) {
-        const title = `the agent offers no ${configId} option${forModel}, so this run goes without it; it offers ${settable().join(", ") || "none"}. config: ${configId}= drops it.`;
-        if (first) out({ sessionId, update: { sessionUpdate: "notice", severity: "warning", title } });
+        const title2 = `the agent offers no ${configId} option${forModel}, so this run goes without it; it offers ${settable().join(", ") || "none"}. config: ${configId}= drops it.`;
+        if (first) out({ sessionId, update: { sessionUpdate: "notice", severity: "warning", title: title2 } });
         continue;
       }
       await setOption(configId, value);
@@ -10766,6 +10766,10 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
   };
   const configOptions = await configure(opened, true);
   out({ relay: "session", sessionId, cwd });
+  const title = process.env.RELAY_TITLE?.trim();
+  if (!resume && title && init.agentCapabilities?.sessionCapabilities?.title)
+    await ctx.request(methods.agent.session.setTitle, { sessionId, title }).catch(() => {
+    });
   const current = configOptions.find((o) => o.id === "model");
   if (current && "currentValue" in current && typeof current.currentValue === "string")
     out({ relay: "model", name: current.currentValue });
