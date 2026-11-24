@@ -1,6 +1,7 @@
 import type { EngineInterface, MatchedHook } from 'claude-code'
 import { questionClosed } from './acp/steps'
 import { unhidden } from './acp/text'
+import type { InboxLine } from './acp/wire-relay'
 import type { Ask } from './adapter'
 import type { World } from './world'
 
@@ -52,7 +53,7 @@ export async function closeInbox(
 // Steers are JSON strings; an interrupt line is an object the harness acts on, never a message it reports.
 export function undeliveredSteers(inbox: Inbox | undefined, steered: number): string[] {
   const steers = (inbox?.lines ?? [])
-    .map((line) => JSON.parse(line) as unknown)
+    .map((line) => JSON.parse(line) as InboxLine)
     .filter((value): value is string => typeof value === 'string')
   // The first user message the harness reports is the prompt; each later one is a steer it took.
   return steers.slice(Math.max(0, steered - 1))
@@ -84,7 +85,8 @@ export async function sendMessage(w: World, $: Parameters<SendHook>[0], e: Param
 // message runs next. True for an interrupt.
 export async function steer($: Pick<EngineInterface, 'fs'>, inbox: Inbox, message: string): Promise<boolean> {
   const asked = INTERRUPT.test(message) ? message.replace(INTERRUPT, '') : undefined
-  const lines = [...inbox.lines, JSON.stringify(asked === undefined ? message : { interrupt: asked })]
+  const line: InboxLine = asked === undefined ? message : { interrupt: asked }
+  const lines = [...inbox.lines, JSON.stringify(line)]
   // Taken before the write: a typed message and a SendMessage at once would otherwise drop one another.
   inbox.lines = lines
   await $.fs.write(inbox.path, lines.map((line) => `${line}\n`).join(''))
@@ -147,7 +149,7 @@ export async function answerAsk(
 }
 
 // An answer into the inbox it was asked from: not into one a later run opened in its place.
-async function answered($: Pick<EngineInterface, 'fs'>, inboxes: Map<string, Inbox>, agentId: string, inbox: Inbox, line: object) {
+async function answered($: Pick<EngineInterface, 'fs'>, inboxes: Map<string, Inbox>, agentId: string, inbox: Inbox, line: InboxLine) {
   if (inboxes.get(agentId) !== inbox) return
   inbox.lines = [...inbox.lines, JSON.stringify(line)]
   await $.fs.write(inbox.path, inbox.lines.map((l) => `${l}\n`).join('')).catch(() => {})

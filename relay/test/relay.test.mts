@@ -3,7 +3,17 @@
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import type { ClientCapabilities } from '@agentclientprotocol/sdk/unstable'
@@ -342,6 +352,7 @@ const questioned = async (kind: 'form' | 'url') => {
 
 test("a harness's question goes out as a question line, without ACP's scope, and the person's answer goes back", async () => {
   const { asked, run, reply } = await questioned('form')
+  assert.ok(asked.mode === 'form')
   assert.deepEqual(
     { mode: asked.mode, message: asked.message, requestedSchema: asked.requestedSchema },
     {
@@ -362,6 +373,7 @@ test("a harness's question goes out as a question line, without ACP's scope, and
 
 test('a link question carries its link and id; a decline goes back as a decline', async () => {
   const { asked, run, reply } = await questioned('url')
+  assert.ok(asked.mode === 'url')
   assert.deepEqual(
     { mode: asked.mode, url: asked.url, elicitationId: asked.elicitationId },
     { mode: 'url', url: 'https://example.com/login', elicitationId: 'e1' },
@@ -369,6 +381,30 @@ test('a link question carries its link and id; a decline goes back as a decline'
   reply({ action: 'decline' })
   assert.equal(await run.exited, 0, run.stderr)
   assert.equal(answer(run.events), 'got {"action":"decline"}')
+})
+
+test('an inbox line that is no JSON, or no inbox line, is skipped and said on stderr; the lines after it still count', async () => {
+  const b = sandbox()
+  const run = startRelay({ agent, prompt: 'hi', cwd: b.work, env: { FAKE_QUESTION: 'form', RELAY_INBOX: b.inbox } })
+  await run.until((line) => relayEvent([line], 'question') !== undefined)
+  const asked = relayEvent(run.events, 'question')
+  assert.ok(asked)
+  appendFileSync(b.inbox, 'not json\n')
+  send(b.inbox, 42)
+  send(b.inbox, { interrupt: 5 })
+  send(b.inbox, { question: asked.id, answer: { action: 'decline' } })
+  assert.equal(await run.exited, 0, run.stderr)
+  assert.equal(answer(run.events), 'got {"action":"decline"}')
+  // An interrupt whose text is no string is not taken.
+  assert.equal(relayEvent(run.events, 'interrupted'), undefined)
+  assert.deepEqual(
+    run.stderr.split('\n').filter((line) => line.includes('inbox line')),
+    [
+      'acp relay: skipped inbox line 1: not JSON',
+      'acp relay: skipped inbox line 2: not a steer, an interrupt or an answer',
+      'acp relay: skipped inbox line 3: not a steer, an interrupt or an answer',
+    ],
+  )
 })
 
 test('an answer that is no accept or decline goes back as a cancel', async () => {

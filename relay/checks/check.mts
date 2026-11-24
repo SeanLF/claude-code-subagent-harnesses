@@ -6,6 +6,7 @@
 // command running asks the agent to run one that writes its `sleep`'s pid once it runs, and waits on that file.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import type { RelayKind } from '../../hooks/acp/wire-relay.ts'
 import { backstop } from '../test/support/backstop.mts'
 import {
   alive,
@@ -144,7 +145,7 @@ console.log('== 6 steer')
   console.log(`  exit ${status}`)
   summary(run.events)
   // One prompt whose answer has STEERED: the message reached the running prompt, not a second one.
-  const count = (name: string) => relayEventsNamed(run.events, name).length
+  const count = (name: RelayKind) => relayEventsNamed(run.events, name).length
   console.log(`  prompts: ${count('prompt_done')}, steered: ${count('steered')}`)
   orphan(pid)
 }

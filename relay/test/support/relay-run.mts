@@ -6,14 +6,13 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSyn
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { SessionNotification, SessionUpdate } from '@agentclientprotocol/sdk/unstable'
+import type { RelayKind, RelayLine, RelayLineOf } from '../../../hooks/acp/wire-relay.ts'
 import { backstop } from './backstop.mts'
 
 const relay = new URL('../../relay.mjs', import.meta.url).pathname
 
-/** One of the relay's own lines, such as `{"relay":"done","stopReason":"end_turn"}`. */
-export type RelayEvent = { readonly relay: string; readonly [field: string]: unknown }
-/** A line the relay printed: one of its own, or an ACP session update it forwarded. */
-export type Printed = RelayEvent | SessionNotification
+/** A line the relay printed: one of its own (hooks/acp/wire-relay.ts), or an ACP session update it forwarded. */
+export type Printed = RelayLine | SessionNotification
 export type ToolCallUpdate = Extract<SessionUpdate, { sessionUpdate: 'tool_call' | 'tool_call_update' }>
 
 /** Whether `bin` runs from PATH: a test of a harness that isn't installed is skipped, not failed. */
@@ -162,7 +161,7 @@ export const send = (inbox: string, value: unknown) => appendFileSync(inbox, `${
 
 // ---- What the relay printed ----
 
-const isRelay = (e: Printed): e is RelayEvent => typeof (e as { relay?: unknown }).relay === 'string'
+const isRelay = (e: Printed): e is RelayLine => typeof (e as { relay?: unknown }).relay === 'string'
 
 export const notifications = (events: readonly Printed[]): SessionNotification[] => events.flatMap((e) => (isRelay(e) ? [] : [e]))
 export const updates = (events: readonly Printed[]): SessionUpdate[] => events.flatMap((e) => (isRelay(e) ? [] : [e.update]))
@@ -175,12 +174,12 @@ export const spoken = (events: readonly Printed[]) => {
   const first = events.findIndex((e) => isRelay(e) && e.relay === 'steered')
   return { replayed: answer(events.slice(0, first)), answered: answer(events.slice(first)) }
 }
-export const relayEvent = (events: readonly Printed[], name: string): RelayEvent | undefined =>
-  events.find((e): e is RelayEvent => isRelay(e) && e.relay === name)
+export const relayEvent = <K extends RelayKind>(events: readonly Printed[], name: K): RelayLineOf<K> | undefined =>
+  events.find((e): e is RelayLineOf<K> => isRelay(e) && e.relay === name)
 export const relayEvents = (events: readonly Printed[]) => events.flatMap((e) => (isRelay(e) ? [e.relay] : []))
 /** Every relay line called `name`, in order. */
-export const relayEventsNamed = (events: readonly Printed[], name: string) =>
-  events.filter((e): e is RelayEvent => isRelay(e) && e.relay === name)
+export const relayEventsNamed = <K extends RelayKind>(events: readonly Printed[], name: K) =>
+  events.filter((e): e is RelayLineOf<K> => isRelay(e) && e.relay === name)
 /** The session the run opened or resumed. */
 export const sessionOf = (events: readonly Printed[]) => String(relayEvent(events, 'session')?.sessionId)
 export const toolCalls = (events: readonly Printed[]) =>

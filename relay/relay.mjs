@@ -3966,6 +3966,89 @@ var $ZodUnion = /* @__PURE__ */ $constructor("$ZodUnion", (inst, def) => {
     });
   };
 });
+function discriminatorMap(def) {
+  const map = /* @__PURE__ */ new Map();
+  for (const option of def.options) {
+    const values = option._zod.propValues?.[def.discriminator];
+    if (!values || values.size === 0)
+      throw new Error(`Invalid discriminated union option at index "${def.options.indexOf(option)}"`);
+    for (const value of values) {
+      if (map.has(value)) {
+        if (value !== void 0)
+          throw new Error(`Duplicate discriminator value "${String(value)}"`);
+        map.set(value, null);
+      } else {
+        map.set(value, option);
+      }
+    }
+  }
+  return map;
+}
+var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor("$ZodDiscriminatedUnion", (inst, def) => {
+  def.inclusive = false;
+  $ZodUnion.init(inst, def);
+  const _super = inst._zod.parse;
+  defineLazyInternal(inst, "propValues", (zod) => {
+    const propValues = {};
+    let undefinedCount = 0;
+    for (const option of zod.def.options) {
+      const pv = option._zod.propValues;
+      if (!pv || Object.keys(pv).length === 0)
+        throw new Error(`Invalid discriminated union option at index "${zod.def.options.indexOf(option)}"`);
+      if (pv[zod.def.discriminator]?.has(void 0))
+        undefinedCount++;
+      for (const [k, v] of Object.entries(pv)) {
+        if (!Object.prototype.hasOwnProperty.call(propValues, k)) {
+          assignProp(propValues, k, /* @__PURE__ */ new Set());
+        }
+        for (const val of v) {
+          propValues[k].add(val);
+        }
+      }
+    }
+    if (!zod.def.unionFallback && undefinedCount > 1)
+      propValues[zod.def.discriminator]?.delete(void 0);
+    return propValues;
+  });
+  def.options.forEach((option, i) => {
+    const propShape = rawShape(option._zod.def);
+    if (propShape && !Object.prototype.hasOwnProperty.call(propShape, def.discriminator)) {
+      throw new Error(`Invalid discriminated union option at index "${i}"`);
+    }
+  });
+  const disc = cached(() => discriminatorMap(def));
+  inst._zod.parse = (payload, ctx) => {
+    const input = payload.value;
+    if (!isObject(input)) {
+      payload.issues.push({
+        code: "invalid_type",
+        expected: "object",
+        input,
+        inst
+      });
+      return payload;
+    }
+    const value = input?.[def.discriminator];
+    const opt = disc.value.get(value);
+    if (opt && (value !== void 0 || ctx.direction !== "backward")) {
+      return opt._zod.run(payload, ctx);
+    }
+    if (def.unionFallback || ctx.direction === "backward") {
+      return _super(payload, ctx);
+    }
+    payload.issues.push({
+      code: "invalid_union",
+      errors: [],
+      note: "No matching discriminator",
+      discriminator: def.discriminator,
+      options: Array.from(disc.value.keys()).filter((value2) => disc.value.get(value2) !== null),
+      input,
+      path: [def.discriminator],
+      inst
+    });
+    return payload;
+  };
+});
 var $ZodIntersection = /* @__PURE__ */ $constructor("$ZodIntersection", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.parse = (payload, ctx) => {
@@ -7271,6 +7354,18 @@ function union(options, params) {
   return new ZodUnion({
     type: "union",
     options,
+    ...util_exports.normalizeParams(params)
+  });
+}
+var ZodDiscriminatedUnion = /* @__PURE__ */ $constructor("ZodDiscriminatedUnion", (inst, def) => {
+  ZodUnion.init(inst, def);
+  $ZodDiscriminatedUnion.init(inst, def);
+});
+function discriminatedUnion(discriminator, options, params) {
+  return new ZodDiscriminatedUnion({
+    type: "union",
+    options,
+    discriminator,
     ...util_exports.normalizeParams(params)
   });
 }
@@ -10624,7 +10719,13 @@ var closeQuestion = (id) => {
   out({ relay: "question_closed", id });
   answerIt(CANCEL);
 };
-var question = (request) => request.mode === "url" ? { mode: "url", message: request.message, url: request.url, elicitationId: request.elicitationId } : { mode: "form", message: request.message, requestedSchema: "requestedSchema" in request ? request.requestedSchema : void 0 };
+var question = (request) => {
+  if (request.mode === "url") {
+    const { message, url: url2, elicitationId } = request;
+    return { mode: "url", message, url: url2, elicitationId };
+  }
+  return { mode: "form", message: request.message, requestedSchema: "requestedSchema" in request ? request.requestedSchema : void 0 };
+};
 var web = (url2) => {
   try {
     return ["https:", "http:"].includes(new URL(String(url2)).protocol);
@@ -10632,14 +10733,27 @@ var web = (url2) => {
     return false;
   }
 };
-var answered = (value) => {
-  const answer = typeof value === "object" && value !== null ? value : {};
-  if (answer.action === "accept")
-    return {
-      action: "accept",
-      content: typeof answer.content === "object" && answer.content !== null ? answer.content : {}
-    };
-  return answer.action === "decline" ? { action: "decline" } : CANCEL;
+var REPLY = discriminatedUnion("action", [
+  object({ action: literal("accept"), content: record(string2(), unknown()).catch({}) }),
+  object({ action: literal("decline") }),
+  object({ action: literal("cancel") })
+]).catch({ action: "cancel" });
+var INBOX = union([
+  string2(),
+  object({ question: string2(), answer: REPLY }),
+  // An answer that names no option picks none.
+  object({ answer: string2(), optionId: string2().nullable().default(null) }),
+  object({ interrupt: string2() })
+]);
+var inboxLine = (text) => {
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { skipped: "not JSON" };
+  }
+  const parsed = INBOX.safeParse(value);
+  return parsed.success ? { line: parsed.data } : { skipped: "not a steer, an interrupt or an answer" };
 };
 var choose = (options, kind) => {
   const option = options.find((o) => o.kind === kind);
@@ -10817,6 +10931,7 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
     steering.add(done);
   };
   let offset = 0;
+  let lines = 0;
   const inbox = process.env.RELAY_INBOX;
   if (inbox)
     setInterval(() => {
@@ -10824,23 +10939,29 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
       const text = readFileSync(inbox, "utf8");
       const end = text.lastIndexOf("\n");
       if (end < offset) return;
-      for (const line of text.slice(offset, end).split("\n")) {
-        if (!line.trim()) continue;
-        const value = JSON.parse(line);
+      for (const raw of text.slice(offset, end).split("\n")) {
+        lines += 1;
+        if (!raw.trim()) continue;
+        const read = inboxLine(raw);
+        if ("skipped" in read) {
+          trace("inbox", { skipped: read.skipped, line: raw });
+          process.stderr.write(`acp relay: skipped inbox line ${lines}: ${read.skipped}
+`);
+          continue;
+        }
+        const value = read.line;
         trace("inbox", value);
         if (typeof value === "string") {
           if (busy && interrupt === void 0 && process.env.RELAY_STEER) steer(value);
           else queue.push(value);
-        } else if (typeof value === "object" && value !== null && "question" in value) {
-          const { question: id, answer } = value;
-          questions.get(id)?.(answered(answer));
-          questions.delete(id);
-        } else if (typeof value === "object" && value !== null && "answer" in value) {
-          const { answer, optionId } = value;
-          asked.get(answer)?.(optionId ?? null);
-          asked.delete(answer);
-        } else if (typeof value === "object" && value !== null && "interrupt" in value) {
-          const text2 = String(value.interrupt);
+        } else if ("question" in value) {
+          questions.get(value.question)?.(value.answer);
+          questions.delete(value.question);
+        } else if ("answer" in value) {
+          asked.get(value.answer)?.(value.optionId);
+          asked.delete(value.answer);
+        } else {
+          const text2 = value.interrupt;
           interrupt = interrupt === void 0 ? text2 : `${interrupt}
 
 ${text2}`;

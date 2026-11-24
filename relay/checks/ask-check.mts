@@ -3,7 +3,7 @@
 // Usage: node relay/checks/ask-check.mts <workdir> <agent mode> <allow|deny> <prompt> -- <agent command...>
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { answer, type Printed, type RelayEvent, relayEvent, send, startRelay, toolCalls } from '../test/support/relay-run.mts'
+import { answer, type Printed, relayEvent, send, startRelay, toolCalls } from '../test/support/relay-run.mts'
 import { args, inherited, workdir } from './support.mts'
 
 const usage = 'node relay/checks/ask-check.mts <workdir> <agent mode> <allow|deny> <prompt> -- <agent command...>'
@@ -18,13 +18,6 @@ mkdirSync(work, { recursive: true })
 const inbox = resolve(work, 'inbox.jsonl')
 writeFileSync(inbox, '')
 
-type Ask = RelayEvent & {
-  readonly id: string
-  readonly title: string
-  readonly kind: string
-  readonly command?: string
-  readonly options: readonly { readonly optionId: string; readonly kind: string }[]
-}
 const want = choice === 'allow' ? 'allow_once' : 'reject_once'
 const start = Date.now()
 const run = startRelay({
@@ -38,11 +31,12 @@ const run = startRelay({
 // Each question as it comes, answered through the inbox as the plugin answers it; until the relay ends.
 const answered = new Set<string>()
 const asked = (line: Printed) => {
-  const ask = relayEvent([line], 'ask') as Ask | undefined
+  const ask = relayEvent([line], 'ask')
   return ask !== undefined && !answered.has(ask.id)
 }
 for (;;) {
-  const ask = (await run.until(asked).catch(() => undefined)) as Ask | undefined
+  const line = await run.until(asked).catch(() => undefined)
+  const ask = line && relayEvent([line], 'ask')
   if (!ask) break
   answered.add(ask.id)
   const option = ask.options.find((o) => o.kind === want)?.optionId ?? null
@@ -56,7 +50,7 @@ const status = await run.exited
 
 for (const e of run.events) {
   const r = relayEvent([e], 'model') ?? relayEvent([e], 'error')
-  if (r) console.log(`${r.relay}: ${String(r.name ?? r.message)}`)
+  if (r) console.log(`${r.relay}: ${r.relay === 'model' ? r.name : r.message}`)
 }
 // An update may leave the title out: the call's last title is its name.
 const titles = new Map<string, string>()

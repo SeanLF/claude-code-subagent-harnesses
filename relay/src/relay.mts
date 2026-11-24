@@ -2,12 +2,10 @@
 // once and closes it. Built into relay/relay.mjs (pnpm build:relay), which ships with the SDK inlined.
 //
 // Usage: node relay.mjs -- <agent command...>, with the prompt on stdin.
+// Prints each ACP session update as received, and {"relay": ...} lines for its own events; reads the plugin's
+// steers, interrupts and answers from RELAY_INBOX. hooks/acp/wire-relay.ts defines both: RelayLine, InboxLine.
 // Env:
-//   RELAY_INBOX       file of JSON lines the plugin appends: a string steers the running prompt (see
-//                     RELAY_STEER) or queues a follow-up, {"interrupt": text} cancels the turn and runs text
-//                     next, {"answer": id, "optionId": id|null} answers a permission request, {"question": id,
-//                     "answer": {"action": ..., "content": ...}} answers a question (each printed as a
-//                     {"relay":"question"} line; {"relay":"question_closed"} says one no longer needs an answer)
+//   RELAY_INBOX       file of JSON lines the plugin appends, one InboxLine each
 //   RELAY_FILES       folder for what the agent sends as bytes (an image, audio, a binary resource): each is saved
 //                     there and printed with {"relay": {"saved": path, "size": bytes}} in its _meta, its bytes left out
 //   RELAY_STEER       how a string reaches a running prompt: steering (codex-acp's _session/steering), prompt
@@ -22,7 +20,6 @@
 //   RELAY_TRACE       for development: a file the relay appends the prompt, its printed lines and inbox lines to
 //   RELAY_POLICY      how permission requests are answered: allow, deny (the default) or ask (every request
 //                     goes to the plugin)
-// Prints each ACP session update as received, and {"relay": ...} lines for its own events.
 import { spawn } from 'node:child_process'
 import {
   appendFileSync,
@@ -39,6 +36,10 @@ import {
 import { dirname, join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk/unstable'
+// As a namespace, not its `z` export, which would bundle all of zod: esbuild then keeps only what is used, mostly
+// what the SDK's own schemas use already.
+import * as z from 'zod/v4'
+import type { InboxLine, RelayLine, RelayQuestion } from '../../hooks/acp/wire-relay.ts'
 
 type Policy = 'allow' | 'deny' | 'ask'
 type Answer = (optionId: string | null) => void
@@ -62,7 +63,8 @@ const trace = (kind: 'prompt' | 'out' | 'inbox', data: unknown) => {
     // Development only: never a reason to fail the run.
   }
 }
-const out = (event: Record<string, unknown>) => {
+// Only a line of via's protocol: the relay's own, or an ACP session notification.
+const out = (event: RelayLine | acp.SessionNotification) => {
   trace('out', event)
   process.stdout.write(`${JSON.stringify(event)}\n`)
 }
@@ -298,10 +300,15 @@ const closeQuestion = (id: string) => {
   answerIt(CANCEL)
 }
 // What a question carries to the person, without ACP's own scope fields: the shape MCP's elicitation takes.
-const question = (request: acp.CreateElicitationRequest) =>
-  request.mode === 'url'
-    ? { mode: 'url', message: request.message, url: request.url, elicitationId: request.elicitationId }
-    : { mode: 'form', message: request.message, requestedSchema: 'requestedSchema' in request ? request.requestedSchema : undefined }
+const question = (request: acp.CreateElicitationRequest): RelayQuestion => {
+  // The SDK checked the request against its schema, so a url one has its link and id: its type, open to modes
+  // ACP may add, can't say so.
+  if (request.mode === 'url') {
+    const { message, url, elicitationId } = request as Extract<acp.CreateElicitationRequest, { mode: 'url' }>
+    return { mode: 'url', message, url, elicitationId }
+  }
+  return { mode: 'form', message: request.message, requestedSchema: 'requestedSchema' in request ? request.requestedSchema : undefined }
+}
 const web = (url: unknown) => {
   try {
     return ['https:', 'http:'].includes(new URL(String(url)).protocol)
@@ -309,14 +316,32 @@ const web = (url: unknown) => {
     return false
   }
 }
-const answered = (value: unknown): QuestionAnswer => {
-  const answer = typeof value === 'object' && value !== null ? (value as { action?: unknown; content?: unknown }) : {}
-  if (answer.action === 'accept')
-    return {
-      action: 'accept',
-      content: typeof answer.content === 'object' && answer.content !== null ? (answer.content as Record<string, never>) : {},
-    }
-  return answer.action === 'decline' ? { action: 'decline' } : CANCEL
+// The plugin's inbox lines (InboxLine), checked as read with the zod the SDK already bundles. A question's answer
+// that is no accept or decline is a cancel, and an accept's content that is no object is empty.
+const REPLY = z
+  .discriminatedUnion('action', [
+    z.object({ action: z.literal('accept'), content: z.record(z.string(), z.unknown()).catch({}) }),
+    z.object({ action: z.literal('decline') }),
+    z.object({ action: z.literal('cancel') }),
+  ])
+  .catch({ action: 'cancel' })
+const INBOX: z.ZodType<InboxLine> = z.union([
+  z.string(),
+  z.object({ question: z.string(), answer: REPLY }),
+  // An answer that names no option picks none.
+  z.object({ answer: z.string(), optionId: z.string().nullable().default(null) }),
+  z.object({ interrupt: z.string() }),
+])
+// An inbox line, or why it is none: such a line is skipped, and said, not taken as something else.
+const inboxLine = (text: string): { line: InboxLine } | { skipped: string } => {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return { skipped: 'not JSON' }
+  }
+  const parsed = INBOX.safeParse(value)
+  return parsed.success ? { line: parsed.data } : { skipped: 'not a steer, an interrupt or an answer' }
 }
 const choose = (options: readonly acp.PermissionOption[], kind: acp.PermissionOptionKind): acp.RequestPermissionResponse => {
   const option = options.find((o) => o.kind === kind)
@@ -370,7 +395,7 @@ const result = await acp
   })
   .onNotification(acp.methods.client.session.update, (ctx) => {
     if (!busy && ctx.params.update.sessionUpdate === 'agent_message_chunk') spokeIdle = true
-    out({ ...ctx.params, update: savedUpdate(ctx.params.update) } as unknown as Record<string, unknown>)
+    out({ ...ctx.params, update: savedUpdate(ctx.params.update) })
   })
   .connectWith(stream, async (ctx) => {
     const init = await ctx.request(acp.methods.agent.initialize, {
@@ -501,7 +526,7 @@ const result = await acp
     let last: acp.PromptResponse | undefined
     const promptDone = (r: acp.PromptResponse) =>
       // Not in the stable type, but codex-acp and opencode send it.
-      out({ relay: 'prompt_done', stopReason: r.stopReason, usage: (r as { usage?: unknown }).usage ?? null })
+      out({ relay: 'prompt_done', stopReason: r.stopReason, usage: r.usage ?? null })
     // Steers still in flight: the run is not over until each has returned. A steer counts as
     // `steered` only once the agent has taken it, or a requeued one would count twice.
     const steering = new Set<Promise<void>>()
@@ -551,6 +576,8 @@ const result = await acp
       steering.add(done)
     }
     let offset = 0
+    // Lines read so far, blank ones too: a skipped line is said by its number in the file.
+    let lines = 0
     const inbox = process.env.RELAY_INBOX
     if (inbox)
       setInterval(() => {
@@ -558,24 +585,30 @@ const result = await acp
         const text = readFileSync(inbox, 'utf8')
         const end = text.lastIndexOf('\n')
         if (end < offset) return
-        for (const line of text.slice(offset, end).split('\n')) {
-          if (!line.trim()) continue
-          const value = JSON.parse(line) as unknown
+        for (const raw of text.slice(offset, end).split('\n')) {
+          lines += 1
+          if (!raw.trim()) continue
+          const read = inboxLine(raw)
+          if ('skipped' in read) {
+            trace('inbox', { skipped: read.skipped, line: raw })
+            process.stderr.write(`acp relay: skipped inbox line ${lines}: ${read.skipped}\n`)
+            continue
+          }
+          const value = read.line
           trace('inbox', value)
           if (typeof value === 'string') {
             // Not into a turn an interrupt is cancelling.
             if (busy && interrupt === undefined && process.env.RELAY_STEER) steer(value)
             else queue.push(value)
-          } else if (typeof value === 'object' && value !== null && 'question' in value) {
-            const { question: id, answer } = value as { question: string; answer?: unknown }
-            questions.get(id)?.(answered(answer))
-            questions.delete(id)
-          } else if (typeof value === 'object' && value !== null && 'answer' in value) {
-            const { answer, optionId } = value as { answer: string; optionId?: string | null }
-            asked.get(answer)?.(optionId ?? null)
-            asked.delete(answer)
-          } else if (typeof value === 'object' && value !== null && 'interrupt' in value) {
-            const text = String((value as { interrupt: unknown }).interrupt)
+          } else if ('question' in value) {
+            // Its content as the person gave it, in the types the form's schema asked for.
+            questions.get(value.question)?.(value.answer as QuestionAnswer)
+            questions.delete(value.question)
+          } else if ('answer' in value) {
+            asked.get(value.answer)?.(value.optionId)
+            asked.delete(value.answer)
+          } else {
+            const text = value.interrupt
             interrupt = interrupt === undefined ? text : `${interrupt}\n\n${text}`
             // An unanswered question would hold the turn open past the cancel.
             for (const [id, answerIt] of asked) {

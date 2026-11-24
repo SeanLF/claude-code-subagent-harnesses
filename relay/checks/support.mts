@@ -36,7 +36,7 @@ export function summary(events: readonly Printed[]) {
   let usage = 'none'
   for (const e of events) {
     const said = relayEvent([e], 'model') ?? relayEvent([e], 'error')
-    if (said) console.log(`  ${said.relay}: ${String(said.name ?? said.message)}`)
+    if (said) console.log(`  ${said.relay}: ${said.relay === 'model' ? said.name : said.message}`)
     // The relay says `steered` as each prompt goes out: what came before the first is replayed history.
     if (relayEvent([e], 'steered') && !prompted) {
       prompted = true

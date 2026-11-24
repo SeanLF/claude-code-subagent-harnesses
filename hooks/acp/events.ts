@@ -2,9 +2,11 @@ import { isRecord } from './json'
 import type { Ask, Norm, Question } from './norm'
 import { unhidden } from './text'
 import type { SessionUpdate } from './wire'
+import type { AskOption, Heard, RelayKind, RelayLineOf, Unchecked } from './wire-relay'
 
 // An ACP agent runs behind relay/relay.mjs, which holds the connection open: the engine writes a
-// spawn's stdin once and closes it. The relay prints ACP session updates and {"relay": ...} events.
+// spawn's stdin once and closes it. The relay prints ACP session updates and {"relay": ...} events
+// (wire-relay.ts's RelayLine).
 
 // Paths under the working folder, as codex-acp's titles give them ("Read file '/abs/repo/a.ts'"), are
 // shown relative to it: the rest of the title survives the clip, and reads as the agent's own.
@@ -110,10 +112,11 @@ function outputOf(u: { readonly content?: unknown; readonly rawOutput?: unknown 
   return cap(parts.join('\n').trim(), 2000)
 }
 
-function ask(e: Record<string, unknown>): Ask | undefined {
+function ask(e: Extract<Heard, { relay: 'ask' }>): Ask | undefined {
   if (typeof e.id !== 'string' || !Array.isArray(e.options)) return undefined
   const options = e.options
     .filter(isRecord)
+    .map((o): Unchecked<AskOption> => o)
     .flatMap((o) =>
       typeof o.optionId === 'string' && typeof o.name === 'string' && typeof o.kind === 'string'
         ? [{ optionId: o.optionId, name: o.name, kind: o.kind }]
@@ -151,7 +154,7 @@ function shownSchema(value: unknown, key = ''): unknown {
   return shown
 }
 
-function question(e: Record<string, unknown>): Question | undefined {
+function question(e: Extract<Heard, { relay: 'question' }>): Question | undefined {
   if (typeof e.id !== 'string' || typeof e.message !== 'string') return undefined
   const message = unhidden(e.message)
   if (e.mode === 'url') {
@@ -382,6 +385,12 @@ function sessionEvents(cwdOf: () => string, from: string) {
 // What a subagent's session says that its nested agent shows; its usage is its own context, not the run's.
 const SHOWN: ReadonlySet<string> = new Set(['message', 'text', 'thinking', 'plan', 'call', 'called', 'notice'])
 
+// The relay lines that end a prompt or the run.
+const ENDS: readonly RelayKind[] = ['prompt_done', 'interrupted', 'error', 'done']
+// Every kind the relay prints has its case: a kind added to RelayLine fails the type check here. At run time, a
+// kind this via doesn't know (a newer relay's) shows nothing.
+const unknownKind = (_: never): Norm[] => []
+
 // A parser per run. Updates before the first prompt are a resumed session's history, replayed by
 // session/load: never part of this answer. So are those between an interrupt and its prompt.
 // from: the agent's name, as its blocks are labelled ("[Image from codex]").
@@ -466,17 +475,11 @@ export function relayEvents(from = 'the agent'): (line: string) => Norm[] {
     }
     return out
   }
-  const read = (line: string): Norm[] => {
-    let e: unknown
-    try {
-      e = JSON.parse(line)
-    } catch {
-      return []
-    }
-    if (!isRecord(e)) return []
+  // One of the relay's own lines, by wire-relay.ts's names: a kind or field renamed there fails the type check here.
+  const relayLine = (e: Heard): Norm[] => {
     // Only the prompt's end, or a line not the relay's, says every message that waits: not a steer, which
     // codex-acp takes mid-turn.
-    if (typeof e.relay === 'string' && !['prompt_done', 'interrupted', 'error', 'done'].includes(e.relay)) moving = new Set()
+    if (!ENDS.includes(e.relay)) moving = new Set()
     switch (e.relay) {
       case 'session':
         if (typeof e.cwd === 'string' && e.cwd) cwd = e.cwd.replace(/\/+$/, '')
@@ -506,7 +509,7 @@ export function relayEvents(from = 'the agent'): (line: string) => Norm[] {
         return [{ k: 'error', message: typeof e.message === 'string' ? e.message : 'the relay failed' }]
       case 'prompt_done': {
         // The prompt's own count of what it wrote, beside the context the last usage_update reported.
-        const usage = isRecord(e.usage) ? e.usage : {}
+        const usage: Unchecked<NonNullable<RelayLineOf<'prompt_done'>['usage']>> = isRecord(e.usage) ? e.usage : {}
         const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0
         const why = unfinished(e.stopReason)
         return [
@@ -514,11 +517,24 @@ export function relayEvents(from = 'the agent'): (line: string) => Norm[] {
           ...(why ? [{ k: 'unfinished', why } as const] : []),
         ]
       }
-      case undefined:
-        break
-      default:
+      // Nothing to show: the run's end comes with the relay's exit, and a lost session with its stderr (sessionLost).
+      case 'session_lost':
+      case 'agent_exit':
+      case 'done':
         return []
+      default:
+        return unknownKind(e)
     }
+  }
+  const read = (line: string): Norm[] => {
+    let e: unknown
+    try {
+      e = JSON.parse(line)
+    } catch {
+      return []
+    }
+    if (!isRecord(e)) return []
+    if (e.relay !== undefined) return typeof e.relay === 'string' ? relayLine(e as Heard) : []
     // The agent's JSON, read through the SDK's types: a field the protocol renames fails the type check
     // here. Its values are still checked, as anything a process prints is.
     if (!live || !isRecord(e.update) || typeof e.update.sessionUpdate !== 'string') return []
