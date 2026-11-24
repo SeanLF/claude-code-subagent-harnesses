@@ -381,7 +381,7 @@ function sessionEvents(cwdOf: () => string, from: string) {
 const SHOWN: ReadonlySet<string> = new Set(['message', 'text', 'thinking', 'plan', 'call', 'called', 'notice'])
 
 // A parser per run. Updates before the first prompt are a resumed session's history, replayed by
-// session/load: never part of this answer.
+// session/load: never part of this answer. So are those between an interrupt and its prompt.
 // from: the agent's name, as its blocks are labelled ("[Image from codex]").
 export function relayEvents(from = 'the agent'): (line: string) => Norm[] {
   let live = false
@@ -487,6 +487,8 @@ export function relayEvents(from = 'the agent'): (line: string) => Norm[] {
         own.steered()
         return [{ k: 'steered' }]
       case 'interrupted':
+        // Until the interrupt's own prompt: what a reopened session says meanwhile is not the answer.
+        live = false
         return [{ k: 'interrupted' }, { k: 'tool', t: '\n▸ interrupted\n' }]
       case 'question_closed':
         return typeof e.id === 'string' ? [{ k: 'question-closed', id: e.id }] : []

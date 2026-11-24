@@ -10668,39 +10668,19 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
     await ctx.notify(methods.agent.session.cancel, { sessionId });
     await new Promise((resolve) => setTimeout(resolve, 500));
   };
+  const reopens = init.agentCapabilities?.sessionCapabilities?.close != null && init.agentCapabilities?.sessionCapabilities?.resume != null;
   if (init.agentCapabilities?.sessionCapabilities?.close)
     close = async () => {
       await ctx.request(methods.agent.session.close, { sessionId }).catch(() => {
       });
     };
   const modeId = process.env.RELAY_AGENT_MODE;
-  if (modeId)
-    await ctx.request(methods.agent.session.setMode, { sessionId, modeId }).catch((error2) => fail(`the agent refused mode ${modeId}: ${reason(error2)}`));
-  let configOptions = opened.configOptions ?? [];
-  const model = process.env.RELAY_MODEL;
-  if (model) {
-    const set = await ctx.request(methods.agent.session.setConfigOption, { sessionId, configId: "model", value: model }).catch((error2) => fail(`the agent refused model ${model}: ${reason(error2)}`));
-    configOptions = set.configOptions ?? configOptions;
-  }
   let extra = {};
   try {
     extra = JSON.parse(process.env.RELAY_CONFIG || "{}");
   } catch {
     fail("RELAY_CONFIG is not a JSON object");
   }
-  const running = configOptions.find((o) => o.id === "model");
-  const forModel = running && "currentValue" in running && typeof running.currentValue === "string" ? ` for ${running.currentValue}` : "";
-  const setOption = async (configId, value) => {
-    if (typeof value !== "string") fail(`${configId} must be a string`);
-    const option = configOptions.find((o) => o.id === configId);
-    if (option === void 0) fail(`the agent offers no ${configId} option${forModel}`);
-    if (option?.type === "select") {
-      const values = option.options.flatMap((o) => "options" in o ? o.options : [o]).map((o) => o.value);
-      if (!values.includes(value)) fail(`the agent offers ${configId} ${values.join(", ")}${forModel}, not ${String(value)}`);
-    }
-    const set = await ctx.request(methods.agent.session.setConfigOption, { sessionId, configId, value }).catch((error2) => fail(`the agent refused ${configId} ${String(value)}: ${reason(error2)}`));
-    configOptions = set.configOptions ?? configOptions;
-  };
   const TUNING = ["model_config", "speed"];
   const reserved = (o) => !TUNING.includes(String(o.category)) || o.id === "mode" || o.id === "model";
   let options = {};
@@ -10709,23 +10689,48 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
   } catch {
     fail("RELAY_OPTIONS is not a JSON object");
   }
-  const settable = () => configOptions.filter((o) => !reserved(o)).map((o) => o.id);
-  for (const [configId, value] of Object.entries(options)) {
-    const option = configOptions.find((o) => o.id === configId);
-    if (option && reserved(option))
-      fail(
-        `${configId} is not an option a config line sets: only ones that tune the model, ${settable().length > 0 ? `such as ${settable().join(", ")}` : "and the agent offers none"}. config: ${configId}= drops it.`
-      );
-    if (option === void 0) {
-      const title = `the agent offers no ${configId} option${forModel}, so this run goes without it; it offers ${settable().join(", ") || "none"}. config: ${configId}= drops it.`;
-      out({ sessionId, update: { sessionUpdate: "notice", severity: "warning", title } });
-      continue;
+  const configure = async (session, first) => {
+    if (modeId)
+      await ctx.request(methods.agent.session.setMode, { sessionId, modeId }).catch((error2) => fail(`the agent refused mode ${modeId}: ${reason(error2)}`));
+    let configOptions2 = session.configOptions ?? [];
+    const model = process.env.RELAY_MODEL;
+    if (model) {
+      const set = await ctx.request(methods.agent.session.setConfigOption, { sessionId, configId: "model", value: model }).catch((error2) => fail(`the agent refused model ${model}: ${reason(error2)}`));
+      configOptions2 = set.configOptions ?? configOptions2;
     }
-    await setOption(configId, value);
-  }
-  for (const [configId, value] of Object.entries(extra)) await setOption(configId, value);
-  if (modeId && Object.keys(options).length > 0)
-    await ctx.request(methods.agent.session.setMode, { sessionId, modeId }).catch((error2) => fail(`the agent refused mode ${modeId}: ${reason(error2)}`));
+    const running = configOptions2.find((o) => o.id === "model");
+    const forModel = running && "currentValue" in running && typeof running.currentValue === "string" ? ` for ${running.currentValue}` : "";
+    const setOption = async (configId, value) => {
+      if (typeof value !== "string") fail(`${configId} must be a string`);
+      const option = configOptions2.find((o) => o.id === configId);
+      if (option === void 0) fail(`the agent offers no ${configId} option${forModel}`);
+      if (option?.type === "select") {
+        const values = option.options.flatMap((o) => "options" in o ? o.options : [o]).map((o) => o.value);
+        if (!values.includes(value)) fail(`the agent offers ${configId} ${values.join(", ")}${forModel}, not ${String(value)}`);
+      }
+      const set = await ctx.request(methods.agent.session.setConfigOption, { sessionId, configId, value }).catch((error2) => fail(`the agent refused ${configId} ${String(value)}: ${reason(error2)}`));
+      configOptions2 = set.configOptions ?? configOptions2;
+    };
+    const settable = () => configOptions2.filter((o) => !reserved(o)).map((o) => o.id);
+    for (const [configId, value] of Object.entries(options)) {
+      const option = configOptions2.find((o) => o.id === configId);
+      if (option && reserved(option))
+        fail(
+          `${configId} is not an option a config line sets: only ones that tune the model, ${settable().length > 0 ? `such as ${settable().join(", ")}` : "and the agent offers none"}. config: ${configId}= drops it.`
+        );
+      if (option === void 0) {
+        const title = `the agent offers no ${configId} option${forModel}, so this run goes without it; it offers ${settable().join(", ") || "none"}. config: ${configId}= drops it.`;
+        if (first) out({ sessionId, update: { sessionUpdate: "notice", severity: "warning", title } });
+        continue;
+      }
+      await setOption(configId, value);
+    }
+    for (const [configId, value] of Object.entries(extra)) await setOption(configId, value);
+    if (modeId && Object.keys(options).length > 0)
+      await ctx.request(methods.agent.session.setMode, { sessionId, modeId }).catch((error2) => fail(`the agent refused mode ${modeId}: ${reason(error2)}`));
+    return configOptions2;
+  };
+  const configOptions = await configure(opened, true);
   const current = configOptions.find((o) => o.id === "model");
   if (current && "currentValue" in current && typeof current.currentValue === "string")
     out({ relay: "model", name: current.currentValue });
@@ -10825,6 +10830,11 @@ ${text2}`;
     promptDone(r);
     if (interrupt !== void 0) {
       out({ relay: "interrupted" });
+      if (reopens) {
+        await ctx.request(methods.agent.session.close, { sessionId }).catch((error2) => fail(`could not stop the interrupted step: ${reason(error2)}`));
+        const reopened = await ctx.request(methods.agent.session.resume, { sessionId, cwd, mcpServers: [] }).catch((error2) => fail(`could not reopen the session after an interrupt: ${reason(error2)}`));
+        await configure(reopened, false);
+      }
       queue.unshift(interrupt);
       interrupt = void 0;
     }

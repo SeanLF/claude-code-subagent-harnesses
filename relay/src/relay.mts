@@ -353,47 +353,22 @@ const result = await acp
       // A moment for the agent to abort its tool before the kill.
       await new Promise((resolve) => setTimeout(resolve, 500))
     }
+    // A cancel stops the turn, not the commands it started: codex keeps them as background terminals, so they
+    // run on until the session closes. An agent that can close and resume a session has it closed after an
+    // interrupt, and resumed for the interrupt's message.
+    const reopens =
+      init.agentCapabilities?.sessionCapabilities?.close != null && init.agentCapabilities?.sessionCapabilities?.resume != null
     if (init.agentCapabilities?.sessionCapabilities?.close)
       close = async () => {
         await ctx.request(acp.methods.agent.session.close, { sessionId }).catch(() => {})
       }
 
     const modeId = process.env.RELAY_AGENT_MODE
-    if (modeId)
-      await ctx
-        .request(acp.methods.agent.session.setMode, { sessionId, modeId })
-        .catch((error: unknown) => fail(`the agent refused mode ${modeId}: ${reason(error)}`))
-    let configOptions = (opened as { configOptions?: acp.SessionConfigOption[] | null }).configOptions ?? []
-    const model = process.env.RELAY_MODEL
-    if (model) {
-      // A model the agent refuses ends the run: carrying on would answer from its default model.
-      const set = await ctx
-        .request(acp.methods.agent.session.setConfigOption, { sessionId, configId: 'model', value: model })
-        .catch((error: unknown) => fail(`the agent refused model ${model}: ${reason(error)}`))
-      configOptions = set.configOptions ?? configOptions
-    }
     let extra: Record<string, unknown> = {}
     try {
       extra = JSON.parse(process.env.RELAY_CONFIG || '{}') as Record<string, unknown>
     } catch {
       fail('RELAY_CONFIG is not a JSON object')
-    }
-    // Checked against what the session offers for its model, after the model is set: an agent may take a value
-    // it does not offer and drop it silently, as codex-acp takes fast-mode on for a model without it.
-    const running = configOptions.find((o) => o.id === 'model')
-    const forModel = running && 'currentValue' in running && typeof running.currentValue === 'string' ? ` for ${running.currentValue}` : ''
-    const setOption = async (configId: string, value: unknown) => {
-      if (typeof value !== 'string') fail(`${configId} must be a string`)
-      const option = configOptions.find((o) => o.id === configId)
-      if (option === undefined) fail(`the agent offers no ${configId} option${forModel}`)
-      if (option?.type === 'select') {
-        const values = option.options.flatMap((o) => ('options' in o ? o.options : [o])).map((o) => o.value)
-        if (!values.includes(value as string)) fail(`the agent offers ${configId} ${values.join(', ')}${forModel}, not ${String(value)}`)
-      }
-      const set = await ctx
-        .request(acp.methods.agent.session.setConfigOption, { sessionId, configId, value: value as string })
-        .catch((error: unknown) => fail(`the agent refused ${configId} ${String(value)}: ${reason(error)}`))
-      configOptions = set.configOptions ?? configOptions
     }
     // The person's options (RELAY_OPTIONS) are only those that tune the model: ACP's model_config and speed
     // categories, such as codex's fast-mode. Anything else may touch the sandbox or approvals under any name
@@ -406,29 +381,66 @@ const result = await acp
     } catch {
       fail('RELAY_OPTIONS is not a JSON object')
     }
-    const settable = () => configOptions.filter((o) => !reserved(o)).map((o) => o.id)
-    for (const [configId, value] of Object.entries(options)) {
-      const option = configOptions.find((o) => o.id === configId)
-      if (option && reserved(option))
-        fail(
-          `${configId} is not an option a config line sets: only ones that tune the model, ${settable().length > 0 ? `such as ${settable().join(', ')}` : 'and the agent offers none'}. config: ${configId}= drops it.`,
-        )
-      // Not a failure: an option held from an earlier message may be one this model lacks, such as Codex's
-      // fast-mode on a model with no fast tier, and every later message would fail on it.
-      if (option === undefined) {
-        const title = `the agent offers no ${configId} option${forModel}, so this run goes without it; it offers ${settable().join(', ') || 'none'}. config: ${configId}= drops it.`
-        out({ sessionId, update: { sessionUpdate: 'notice', severity: 'warning', title } })
-        continue
+    // The session's mode and options: set again on a session reopened after an interrupt, which starts from the
+    // agent's defaults. first: the run's own session, the only one whose warnings are said.
+    const configure = async (session: { configOptions?: acp.SessionConfigOption[] | null }, first: boolean) => {
+      if (modeId)
+        await ctx
+          .request(acp.methods.agent.session.setMode, { sessionId, modeId })
+          .catch((error: unknown) => fail(`the agent refused mode ${modeId}: ${reason(error)}`))
+      let configOptions = session.configOptions ?? []
+      const model = process.env.RELAY_MODEL
+      if (model) {
+        // A model the agent refuses ends the run: carrying on would answer from its default model.
+        const set = await ctx
+          .request(acp.methods.agent.session.setConfigOption, { sessionId, configId: 'model', value: model })
+          .catch((error: unknown) => fail(`the agent refused model ${model}: ${reason(error)}`))
+        configOptions = set.configOptions ?? configOptions
       }
-      await setOption(configId, value)
+      // Checked against what the session offers for its model, after the model is set: an agent may take a value
+      // it does not offer and drop it silently, as codex-acp takes fast-mode on for a model without it.
+      const running = configOptions.find((o) => o.id === 'model')
+      const forModel =
+        running && 'currentValue' in running && typeof running.currentValue === 'string' ? ` for ${running.currentValue}` : ''
+      const setOption = async (configId: string, value: unknown) => {
+        if (typeof value !== 'string') fail(`${configId} must be a string`)
+        const option = configOptions.find((o) => o.id === configId)
+        if (option === undefined) fail(`the agent offers no ${configId} option${forModel}`)
+        if (option?.type === 'select') {
+          const values = option.options.flatMap((o) => ('options' in o ? o.options : [o])).map((o) => o.value)
+          if (!values.includes(value as string)) fail(`the agent offers ${configId} ${values.join(', ')}${forModel}, not ${String(value)}`)
+        }
+        const set = await ctx
+          .request(acp.methods.agent.session.setConfigOption, { sessionId, configId, value: value as string })
+          .catch((error: unknown) => fail(`the agent refused ${configId} ${String(value)}: ${reason(error)}`))
+        configOptions = set.configOptions ?? configOptions
+      }
+      const settable = () => configOptions.filter((o) => !reserved(o)).map((o) => o.id)
+      for (const [configId, value] of Object.entries(options)) {
+        const option = configOptions.find((o) => o.id === configId)
+        if (option && reserved(option))
+          fail(
+            `${configId} is not an option a config line sets: only ones that tune the model, ${settable().length > 0 ? `such as ${settable().join(', ')}` : 'and the agent offers none'}. config: ${configId}= drops it.`,
+          )
+        // Not a failure: an option held from an earlier message may be one this model lacks, such as Codex's
+        // fast-mode on a model with no fast tier, and every later message would fail on it.
+        if (option === undefined) {
+          const title = `the agent offers no ${configId} option${forModel}, so this run goes without it; it offers ${settable().join(', ') || 'none'}. config: ${configId}= drops it.`
+          if (first) out({ sessionId, update: { sessionUpdate: 'notice', severity: 'warning', title } })
+          continue
+        }
+        await setOption(configId, value)
+      }
+      // via's own options last: they are what the run needs. Its mode again too, after the person's options: one
+      // the session names some other way than mode must not leave it in another.
+      for (const [configId, value] of Object.entries(extra)) await setOption(configId, value)
+      if (modeId && Object.keys(options).length > 0)
+        await ctx
+          .request(acp.methods.agent.session.setMode, { sessionId, modeId })
+          .catch((error: unknown) => fail(`the agent refused mode ${modeId}: ${reason(error)}`))
+      return configOptions
     }
-    // via's own options last: they are what the run needs. Its mode again too, after the person's options: one
-    // the session names some other way than mode must not leave it in another.
-    for (const [configId, value] of Object.entries(extra)) await setOption(configId, value)
-    if (modeId && Object.keys(options).length > 0)
-      await ctx
-        .request(acp.methods.agent.session.setMode, { sessionId, modeId })
-        .catch((error: unknown) => fail(`the agent refused mode ${modeId}: ${reason(error)}`))
+    const configOptions = await configure(opened as { configOptions?: acp.SessionConfigOption[] | null }, true)
     const current = configOptions.find((o) => o.id === 'model')
     if (current && 'currentValue' in current && typeof current.currentValue === 'string')
       out({ relay: 'model', name: current.currentValue })
@@ -542,6 +554,16 @@ const result = await acp
       promptDone(r)
       if (interrupt !== undefined) {
         out({ relay: 'interrupted' })
+        // The interrupted step's commands stop with the session, which reopens for the interrupt's message.
+        if (reopens) {
+          await ctx
+            .request(acp.methods.agent.session.close, { sessionId })
+            .catch((error: unknown) => fail(`could not stop the interrupted step: ${reason(error)}`))
+          const reopened = await ctx
+            .request(acp.methods.agent.session.resume, { sessionId, cwd, mcpServers: [] })
+            .catch((error: unknown) => fail(`could not reopen the session after an interrupt: ${reason(error)}`))
+          await configure(reopened as { configOptions?: acp.SessionConfigOption[] | null }, false)
+        }
         queue.unshift(interrupt)
         interrupt = undefined
       }

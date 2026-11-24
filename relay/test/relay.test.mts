@@ -114,6 +114,44 @@ test('a stopped run cancels the turn, then closes the session, before the kill',
   assert.equal(relayEvent(run.events, 'done'), undefined)
 })
 
+// Codex keeps a cancelled turn's commands as background terminals until its session closes.
+test("an interrupt closes the session, which stops the step's commands, and reopens it for its message", async () => {
+  const b = sandbox()
+  const log = logFile()
+  const env = {
+    FAKE_CLOSE: 'resume',
+    FAKE_HANG: 'once',
+    FAKE_ECHO: '1',
+    FAKE_LOG: log,
+    RELAY_INBOX: b.inbox,
+    RELAY_AGENT_MODE: 'workspace-write',
+  }
+  const run = startRelay({ agent, prompt: 'hi', cwd: b.work, env })
+  await run.until((line) => answer([line]) === 'holding')
+  send(b.inbox, { interrupt: 'stop' })
+  assert.equal(await run.exited, 0, run.stderr)
+  // The mode is set again on the reopened session, which starts from the agent's defaults; the run's end closes it too.
+  const mode = 'mode workspace-write'
+  assert.deepEqual(logged(log), [mode, 'prompt', 'cancel', 'close', 'resume', mode, 'prompt', 'close'])
+  assert.deepEqual(relayEventsNamed(run.events, 'interrupted').length, 1)
+})
+
+// Without resume the session stays open across the interrupt, as before.
+test('an interrupt leaves the session open for an agent that cannot resume one', async () => {
+  const b = sandbox()
+  const log = logFile()
+  const run = startRelay({
+    agent,
+    prompt: 'hi',
+    cwd: b.work,
+    env: { FAKE_CLOSE: '1', FAKE_HANG: 'once', FAKE_ECHO: '1', FAKE_LOG: log, RELAY_INBOX: b.inbox },
+  })
+  await run.until((line) => answer([line]) === 'holding')
+  send(b.inbox, { interrupt: 'stop' })
+  assert.equal(await run.exited, 0, run.stderr)
+  assert.deepEqual(logged(log), ['prompt', 'cancel', 'prompt', 'close'])
+})
+
 /** A run with the fake agent offering config options, and what it ended with and set. */
 const configured = async (env: Record<string, string>) => {
   const log = logFile()
