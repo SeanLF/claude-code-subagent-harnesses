@@ -12,10 +12,18 @@ A harness's steps fold into one line, such as "Ran 3 commands, 1 failed"; ctrl+o
 
 ## Set up
 
-`/plugin install via --marketplace SeanLF/claude-code-subagent-harnesses` in Claude Code, or from a shell:
+`/plugin install via --marketplace SeanLF/via-claude-code` in Claude Code, or from a shell:
 
 ```
-claude plugin install via --marketplace SeanLF/claude-code-subagent-harnesses
+claude plugin install via --marketplace SeanLF/via-claude-code
+```
+
+Installed it before 0.12.0, as `via@claude-code-subagent-harnesses`? That marketplace was renamed, so updates stop there. Move to the new one, then set your `via` settings in `/config` again:
+
+```
+claude plugin uninstall via@claude-code-subagent-harnesses
+claude plugin marketplace remove claude-code-subagent-harnesses
+claude plugin install via --marketplace SeanLF/via-claude-code
 ```
 
 Needs Node 22.18 or later on PATH; Codex also needs npm. Install at least one harness: [Codex](https://github.com/openai/codex), [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), [OpenCode](https://opencode.ai) or [pi](https://pi.dev). Your agent can run the installs; signing in opens a browser, so that part is yours. Restart Claude Code afterwards, and again after adding another harness, so it sees what's on your PATH. Tested on macOS, CI also runs on Linux; Windows is untested.
