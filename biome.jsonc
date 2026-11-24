@@ -10,6 +10,7 @@
       "pi-extension/**",
       "relay/src/**",
       "relay/test/**",
+      "relay/checks/**",
       "types/**",
       "*.json",
       "relay/*.json",
@@ -49,7 +50,8 @@
     {
       // A test waits on the event it needs, never on time (CONTRIBUTING.md, Tests). The one backstop that ends a
       // hung run is relay/test/support/backstop.mts; a spawned process's timeout and a test's timeout are options.
-      "includes": ["tests/**", "relay/test/**", "mcp/test/**", "**/*.test.*", "!relay/test/support/backstop.mts"],
+      // The relay's live checks too: they wait on what the relay prints, as the tests do.
+      "includes": ["tests/**", "relay/test/**", "relay/checks/**", "mcp/test/**", "**/*.test.*", "!relay/test/support/backstop.mts"],
       "linter": {
         "rules": {
           "style": {

@@ -11,7 +11,7 @@ export type Policy = 'allow' | 'deny' | 'ask'
 const relayArgv = (root: string, agent: readonly string[]) => ['node', `${root}/relay/relay.mjs`, '--', ...agent]
 
 // What the relay needs for one run.
-// steer: how the agent takes a message mid-run, tested live on each (relay/checks/check.sh).
+// steer: how the agent takes a message mid-run, tested live on each (relay/checks/check.mts).
 function relayEnv(c: {
   inbox?: string
   files?: string

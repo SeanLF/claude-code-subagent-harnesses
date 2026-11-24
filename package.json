@@ -10,6 +10,8 @@
     "lint": "biome ci .",
     "format": "biome check --write .",
     "test:relay": "node --test 'relay/test/**/*.test.mts'",
+    "check:relay": "node relay/checks/check.mts",
+    "check:relay-ask": "node relay/checks/ask-check.mts",
     "test:mcp": "node --test mcp/test/*.test.mts",
     "eval": "claude plugin eval . --ablation none --model haiku --allow-real-servers --allow-tools SendMessage --max-cost-usd 0.5 --trust-plugin --no-publish"
   },
