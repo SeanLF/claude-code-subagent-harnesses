@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { type Asking, type Pending, showQuestions } from '../hooks/steer'
+
 import { agentInfo, arrange, bottom, ENV, hang, hold, lines, node, run, type Spawn, split, type Write } from './helpers'
 
 test('a SendMessage to a live pi agent is steered into its inbox', async ($, on) => {
@@ -323,4 +325,18 @@ test('an interrupt that lands after pi finished keeps the answer and names the i
   expect(result.answer).toContain('all done')
   expect(result.answer).toContain('Not delivered before pi finished')
   expect(result.answer).toContain('too late')
+})
+
+test('a dialog whose question the harness closed is answered at once with no answers, though the person never answered', async () => {
+  const stop = new AbortController()
+  const question = { question: 'Ship it?', header: 'Ship', multiSelect: false, options: [{ label: 'Yes' }, { label: 'No' }] }
+  const pending: Pending = { id: 1, questions: [question] as never, stop: stop.signal, done: new Promise(() => {}) }
+  const w: Asking = { asking: new Map([[1, pending]]), asked: 1, interactive: true, background: new Set() }
+  // No askUserQuestionTimeout: only the harness closing the question can end this dialog.
+  const $ = { settings: { read: async () => undefined }, viaQuestions: { away: async () => false } } as never
+  // The person never answers: Claude Code's dialog, beneath via's hook, never settles.
+  const person = (() => new Promise<never>(() => {})) as never
+  const shown = showQuestions(w, $, { questions: [question] } as never, person)
+  stop.abort()
+  expect(await shown).toEqual({ result: { questions: [question], answers: {} } })
 })

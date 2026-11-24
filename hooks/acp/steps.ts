@@ -17,8 +17,11 @@ export type Mark =
   | { kind: 'question-closed'; id: string }
   // A harness's subagent to show as an agent nested under this one: the step calls the Agent tool.
   | { kind: 'spawn'; child: string; type: string; title: string; prompt?: string }
-// What a step call carries: the harness's call, or its question to the person, which the step server asks
-// through Claude Code's own form (MCP elicitation).
+  // A message from this agent to another, such as a question handed to the main agent: the step calls SendMessage.
+  // question: the handed question it carries, sent only while that question heads the line.
+  | { kind: 'send'; to: string; summary: string; message: string; question?: string }
+export type Send = Extract<Mark, { kind: 'send' }>
+// What a step call carries: the harness's call, or its question to the person, which the call's hook asks.
 export type CallInput = { kind: string; title: string; path?: string; question?: Question }
 
 // A harness run that outlives its step: steps and the tool's tool.call hook take turns reading it.
@@ -37,12 +40,32 @@ export type Job = {
 }
 
 // The plugin's tool, by its registered name, and the runs and calls in flight.
-export type Steps = {
+type Line = { id: string; send: Send; sent?: true }
+export type Steps<Handed extends Line = Line> = {
   tool: string
   spawns: Map<string, string> // by an Agent tool_use id a step made: the harness subagent it shows
   jobs: Map<string, Job> // by agent id
   // By tool_use_id: the harness's own call id; question, when the call asks the person (the hook lets it through).
   calls: Map<string, { agentId: string; id: string; question?: true }>
+  // By agent id: the harness's questions handed to the main agent, in the order they were handed (id: the harness's
+  // question id). Only the first is sent to the main agent (sent, once it is), and only a sent one takes its answer;
+  // the next is sent once it is answered or closed. Each goes once the harness closes it or the run ends: nothing then
+  // waits on the answer.
+  handed: Map<string, Handed[]>
+}
+
+// A handed question answered or closed: it leaves the line, and when it was the one the main agent had, the next
+// goes to the main agent, after what the run has already said (a close already read goes first, and that message
+// is then dropped). A reply the main agent wrote to a question closed after it was sent can still reach the next
+// one: the main agent's message names no question.
+export function dropHanded(w: Pick<Steps, 'handed'>, job: Job | undefined, agentId: string, id: string): void {
+  const line = w.handed.get(agentId)
+  const at = line?.findIndex((h) => h.id === id) ?? -1
+  if (line === undefined || at < 0) return
+  line.splice(at, 1)
+  const [next] = line
+  if (next === undefined) w.handed.delete(agentId)
+  else if (at === 0) job?.held.push(next.send)
 }
 
 // The Agent calls a step makes for a harness's subagents: approved without the mode's classifier, which
@@ -50,6 +73,8 @@ export type Steps = {
 export const CHILD_CALL = 'toolu_via_child_'
 // The calls a step makes for a harness's own tool calls and questions: ids no model request can carry.
 export const STEP_CALL = 'toolu_step_'
+// The SendMessage calls a step makes (a send mark).
+export const SEND_CALL = 'toolu_via_send_'
 
 // What a run ended early answers its next step: an aborted run's end of turn, as drive's own.
 function ended(turnId: string): TurnStepResult {
@@ -107,6 +132,7 @@ export function endJob(w: Steps, agentId: string): void {
   const job = w.jobs.get(agentId)
   if (job === undefined) return
   w.jobs.delete(agentId)
+  w.handed.delete(agentId)
   for (const [id, call] of w.calls) if (call.agentId === agentId) w.calls.delete(id)
   job.abort.abort()
   void job.gen.return(undefined as never).catch(() => {})
@@ -141,7 +167,10 @@ export async function* pump(
       if (heldChunk !== undefined) c = heldChunk
       else if (job.final !== undefined) {
         // A new turn may already hold this agent's slot.
-        if (w.jobs.get(e.agentId ?? '') === job) w.jobs.delete(e.agentId ?? '')
+        if (w.jobs.get(e.agentId ?? '') === job) {
+          w.jobs.delete(e.agentId ?? '')
+          w.handed.delete(e.agentId ?? '')
+        }
         return { ...job.final, turnId: e.turnId, index: e.index }
       } else if (halted(job)) continue
       else {
@@ -180,8 +209,32 @@ export async function* pump(
         job.outputs.set(c.id, { output: c.output, failed: c.failed })
         continue
       }
-      // Its question's hook has already answered: nothing waits on it.
-      if (c.kind === 'question-closed') continue
+      // Its question's hook has already answered; a question handed on no longer takes the answer.
+      if (c.kind === 'question-closed') {
+        dropHanded(w, job, e.agentId ?? '', c.id)
+        continue
+      }
+      if (c.kind === 'send') {
+        // A handed question closed or answered before its message went: the message no longer asks anything.
+        const head = c.question === undefined ? undefined : w.handed.get(e.agentId ?? '')?.[0]
+        if (c.question !== undefined && head?.id !== c.question) continue
+        if (head !== undefined) head.sent = true
+        job.count += 1
+        const id = `${SEND_CALL}${e.turnId.replace(/[^A-Za-z0-9_]/g, '_')}_${job.count}`
+        const input = { to: c.to, summary: c.summary, message: c.message }
+        const index = block(-1 - job.count)
+        yield { kind: 'tool', index, id, name: 'SendMessage' }
+        yield { kind: 'input', index, json: JSON.stringify(input) }
+        yield { kind: 'stop', stopReason: 'tool_use', usage: null }
+        return {
+          turnId: e.turnId,
+          index: e.index,
+          answer: '',
+          toolUses: [{ name: 'SendMessage', input }],
+          stopReason: 'tool_use',
+          usage: null,
+        }
+      }
       if (c.kind === 'spawn') {
         job.count += 1
         const id = `${CHILD_CALL}${e.turnId.replace(/[^A-Za-z0-9_]/g, '_')}_${job.count}`

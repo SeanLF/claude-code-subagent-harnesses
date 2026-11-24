@@ -1,9 +1,12 @@
+import type { AgentSpawnInput, TurnStepChunk } from 'claude-code'
 import { expect, mock, type TestBody, test } from 'claude-code/testing'
 
 import { codexMode } from '../../hooks/adapters/codex'
 import { agentInfo, agentStore, ROOT, run, runTurn, STEP } from '../helpers'
 
 type TestOn = Parameters<TestBody>[1]
+// A dialog's questions, as Claude Code's AskUserQuestion takes them.
+type Dialog = { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }[]
 type Spawn = { argv: string[]; input: string | undefined; env?: Record<string, string> }
 type Write = { path: string; text: string }
 
@@ -84,7 +87,7 @@ function arrange(
     answer?: string | 'reject'
     listed?: string[][]
     asked?: string[]
-    pause?: { first: string; until: Promise<void> }
+    pause?: { first: string; until: Promise<void>; second?: { text: string; until: Promise<void> } }
     node?: string
     npm?: number
     uninstalled?: boolean
@@ -100,13 +103,20 @@ function arrange(
     unheld?: boolean // the stream goes on past a question without waiting for its answer
     env?: Record<string, string> // more of the person's environment, beside HOME
     description?: string // the Agent description the spawn left in the agent's record
+    // Stands in for the person at Claude Code's AskUserQuestion dialog: each dialog's questions, and the result.
+    dialog?: { shown: Dialog[]; answer: (questions: Dialog) => object | Promise<object> }
+    timeout?: string // the person's askUserQuestionTimeout setting
+    agents?: Promise<void> // Claude Code's agent list answers once this settles
   } = {},
 ) {
   const clock = mock.clock(on)
   mock.env(on, { HOME: '/home/u', ...o.env })
-  on('agent.list', () => ({ value: [AGENT] }))
+  on('agent.list', async () => {
+    await o.agents
+    return { value: [AGENT] }
+  })
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
-  on('turn.complete', (_, e, next) => next(e))
+  on('turn.complete', (_, e) => ({ text: e.answer }))
   on('session.messages', () => ({ value: [] }))
   const records = agentStore(on, {
     a1: { harness: 'codex', mode: o.mode ?? 'default', ...(o.description ? { description: o.description } : {}) },
@@ -162,7 +172,14 @@ function arrange(
         : [{ name: 'config.toml', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false }],
   }))
   on('fs.read', (_, e) => ({ value: `contents of ${e.path}` }))
-  on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
+  on('settings.read', (_, e, next) => (o.timeout === undefined ? next(e) : { value: { askUserQuestionTimeout: o.timeout } }))
+  on('tool.call', { tool: 'AskUserQuestion' }, async (_, e) => {
+    const dialog = o.dialog
+    if (dialog) {
+      const questions = e.questions as unknown as Dialog
+      dialog.shown.push(questions)
+      return { result: { questions: e.questions, ...(await dialog.answer(questions)) } as never }
+    }
     if (o.answer === 'reject') throw new Error('dismissed')
     const question = e.questions[0]?.question ?? ''
     o.asked?.push(question, ...(e.questions[0]?.options ?? []).map((x: { label: string }) => x.label))
@@ -179,6 +196,10 @@ function arrange(
     if (o.pause) {
       yield { stream: 'stdout' as const, text: o.pause.first }
       await o.pause.until
+      if (o.pause.second) {
+        yield { stream: 'stdout' as const, text: o.pause.second.text }
+        await o.pause.second.until
+      }
     }
     // Like the relay, a stream with a question waits for its answer before going on.
     const [before, after] = o.unheld ? [out.stdout ?? ''] : (out.stdout ?? '').split(/(?<="relay":"(?:ask|question)"[^\n]*\n)/)
@@ -536,21 +557,135 @@ const QUESTION = {
   message: 'Which target?',
   requestedSchema: { type: 'object', properties: { target: { type: 'string', enum: ['staging', 'production'] } } },
 }
+// A sign-in page to open: a question AskUserQuestion can't show, so the step server asks it in Claude Code's MCP form.
+const LINK = {
+  relay: 'question',
+  id: '7-k1-q2',
+  mode: 'url',
+  message: 'Sign in',
+  url: 'https://example.com/login',
+  elicitationId: 'e1',
+}
 const replied = (reply: object) => () => [{ type: 'text', text: JSON.stringify(reply) }]
 const inboxOf = (writes: Write[]) => writes.filter((w) => w.path.endsWith('/inbox/codex-a1.jsonl')).flatMap((w) => w.text.split('\n'))
+const picked = (label: string) => (questions: Dialog) => ({ answers: { [questions[0]?.question ?? '']: label } })
+const never = () => new Promise<object>(() => {})
+// The agent as Claude Code spawns it: in the background, unless a test says otherwise; headless, in a -p run.
+async function spawn($: Parameters<TestBody>[0], on: TestOn, background = true, headless = false) {
+  on('agent.spawn', (_, e) => ({ model: e.model ?? '', agentId: 'a1' }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  if (headless) await $.session.start({ cwd: '/', surface: null, isInteractive: false })
+  const input: AgentSpawnInput = {
+    tool_use_id: 'toolu_spawn',
+    subagentType: 'via:codex',
+    prompt: 'go',
+    description: 'd',
+    provider: { plugin: 'engine', tier: 'core' },
+    parentModel: 'haiku',
+    background,
+    fork: false,
+  }
+  await $.agent.spawn(input)
+}
+// Runs the turn on past via's own SendMessage call, as the engine would, once that call is answered.
+async function runOn($: Parameters<TestBody>[0], from: number) {
+  return runTurn($, { ...STEP, index: from })
+}
+const sent = (chunks: TurnStepChunk[]) =>
+  chunks.flatMap((c, i) => {
+    const tool = chunks[i - 1]
+    return c.kind === 'input' && tool?.kind === 'tool' && tool.name === 'SendMessage'
+      ? [{ id: tool.id, ...(JSON.parse(c.json) as { to: string; summary: string; message: string }) }]
+      : []
+  })
 
-test("codex's question goes to the step server, which asks in Claude Code's own form, and the reply goes to the inbox", async ($, on) => {
+// codex-acp puts each of Codex's questions in a field's title, its choices as oneOf, and a note field beside it
+// (seen live, 2026-11-22).
+const long = (n: number) => `The full E2E run found a scope conflict number ${n}: should the fix include the header change?`
+const CODEX_FORM = {
+  relay: 'question',
+  id: '7-k1-q1',
+  mode: 'form',
+  message: 'Codex keeps working while you answer.',
+  requestedSchema: {
+    type: 'object',
+    properties: {
+      question_0: {
+        type: 'string',
+        title: long(1),
+        oneOf: [
+          { const: 'Yes', title: 'Yes' },
+          { const: 'No', title: 'No' },
+        ],
+      },
+      question_0_note: { type: 'string', title: 'Additional answer or note' },
+    },
+  },
+}
+
+test("codex's question is asked whole in Claude Code's AskUserQuestion dialog, and the option picked goes to codex", async ($, on) => {
   const writes: Write[] = []
-  const step = { called: [] as Record<string, unknown>[], result: replied({ action: 'accept', content: { target: 'staging' } }) }
-  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), QUESTION, ...CAPTURED.slice(10)]) }, { writes, step })
+  const dialog = { shown: [] as Dialog[], answer: picked('No') }
+  const step = { called: [] as Record<string, unknown>[], result: replied({ action: 'decline' }) }
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), CODEX_FORM, ...CAPTURED.slice(10)]) }, { writes, dialog, step })
+  await spawn($, on)
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { calls } = await runTurn($)
-  const { relay: _, ...question } = QUESTION
-  expect(step.called).toHaveLength(1)
-  expect(step.called[0]).toMatchObject({ kind: 'question', title: 'Which target?', question })
-  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content: { target: 'staging' } } }))
+  // The title whole, past the form's 47 characters; the note field is where typed text goes, not a question.
+  expect(dialog.shown).toEqual([
+    [
+      {
+        question: `Codex keeps working while you answer.\n\n${long(1)}`,
+        header: 'codex',
+        multiSelect: false,
+        options: [
+          { label: 'Yes', description: '' },
+          { label: 'No', description: '' },
+          { label: 'Let Claude answer', description: 'Hand this question to the main agent, which answers it for you' },
+        ],
+      },
+    ],
+  ])
+  expect(step.called).toHaveLength(0)
+  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content: { question_0: 'No' } } }))
   // The row says what the person answered.
-  expect(calls).toContainEqual({ result: 'Answered: {"target":"staging"}' })
+  expect(calls).toContainEqual({ result: 'Answered: {"question_0":"No"}' })
+})
+
+test('text typed under "Other" goes to the note field of the question it answers', async ($, on) => {
+  const writes: Write[] = []
+  const dialog = { shown: [] as Dialog[], answer: picked('Only the header, not the footer') }
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), CODEX_FORM, ...CAPTURED.slice(10)]) }, { writes, dialog })
+  await spawn($, on)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  await runTurn($)
+  const content = { question_0_note: 'Only the header, not the footer' }
+  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content } }))
+})
+
+test('a number outside its range is asked again with why', async ($, on) => {
+  const writes: Write[] = []
+  const form = {
+    ...QUESTION,
+    requestedSchema: {
+      type: 'object',
+      properties: { workers: { type: 'integer', title: 'How many workers?', minimum: 1, maximum: 8 } },
+      required: ['workers'],
+    },
+  }
+  const said = ['9', '4']
+  const dialog = { shown: [] as Dialog[], answer: (q: Dialog) => picked(said.shift() ?? '')(q) }
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), form, ...CAPTURED.slice(10)]) }, { writes, dialog })
+  await spawn($, on)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  await runTurn($)
+  expect(dialog.shown.map((d) => d[0]?.question)).toEqual([
+    'Which target?\n\nHow many workers? (a whole number from 1 to 8)',
+    '"Which target?\n\nHow many workers? (a whole number from 1 to 8)" needs a whole number from 1 to 8, not "9".\n\nWhich target?\n\nHow many workers? (a whole number from 1 to 8)',
+  ])
+  // The number is typed under "Other"; Decline makes the dialog's second option.
+  expect(dialog.shown[0]?.[0]?.options.map((o) => o.label)).toEqual(['Let Claude answer', 'Decline'])
+  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content: { workers: 4 } } }))
 })
 
 test('a question the step server leaves unanswered goes back to codex as a cancel', async ($, on) => {
@@ -559,7 +694,7 @@ test('a question the step server leaves unanswered goes back to codex as a cance
     called: [] as Record<string, unknown>[],
     result: () => [{ type: 'text', text: 'via could not report this harness tool call.' }],
   }
-  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), QUESTION, ...CAPTURED.slice(10)]) }, { writes, step })
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), { ...LINK, id: '7-k1-q1' }, ...CAPTURED.slice(10)]) }, { writes, step })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { calls } = await runTurn($)
   expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'cancel' } }))
@@ -570,9 +705,9 @@ test('a question codex closes before the person answers ends the wait, and nothi
   const writes: Write[] = []
   // The person never answers: the turn ends only if the closed line ends the wait, and with no answer nothing
   // can reach the inbox.
-  const step = { called: [] as Record<string, unknown>[], result: () => new Promise(() => {}) }
+  const dialog = { shown: [] as Dialog[], answer: never }
   const closed = { relay: 'question_closed', id: QUESTION.id }
-  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), QUESTION, closed, ...CAPTURED.slice(10)]) }, { writes, step, unheld: true })
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), QUESTION, closed, ...CAPTURED.slice(10)]) }, { writes, dialog, unheld: true })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { calls, result } = await runTurn($)
   expect(calls).toContainEqual({ result: 'No longer needed: the harness moved on before you answered.' })
@@ -594,6 +729,8 @@ test("a question's shown text loses the characters that hide or reorder it; its 
         size: { type: 'string', enum: [`s${hidden}`, 'm'], default: `m${hidden}` },
         speed: { type: 'string', oneOf: [{ const: `f${hidden}` }, { const: 'slow', title: 'Slow' }] },
         [`no${hidden}te`]: { type: 'string' },
+        // A fifth field: more than AskUserQuestion's four, so the form asks it.
+        when: { type: 'string' },
       },
     },
   }
@@ -628,6 +765,7 @@ test("a question's shown text loses the characters that hide or reorder it; its 
           ],
         },
         [`no${hidden}te`]: { type: 'string', title: 'note' },
+        when: { type: 'string' },
       },
     },
   })
@@ -635,12 +773,13 @@ test("a question's shown text loses the characters that hide or reorder it; its 
   expect(step.called).toHaveLength(2)
 })
 
-// Claude Code's form cuts a field's title at about 47 characters, and codex-acp puts each of Codex's questions in
-// its field's title (seen live, 2026-11-22). The message shows 3 lines, each cropped at the terminal's width: a long
-// question goes first in it, wrapped to 72 columns, and its field gets a short label. A later one moves only while
-// every moved question still fits in those 3 lines; otherwise it keeps its own title. A short title stays put.
-const long = (n: number) => `The full E2E run found a scope conflict number ${n}: should the fix include the header change?`
-const field = (title: string) => ({ type: 'string', title, oneOf: [{ const: 'Yes', title: 'Yes' }] })
+// Claude Code's MCP form cuts a field's title at about 47 characters, and codex-acp puts each of Codex's questions
+// in its field's title (seen live, 2026-11-22). The message shows 3 lines, each cropped at the terminal's width: a
+// long question goes first in it, wrapped to 72 columns, and its field gets a short label. A later one moves only
+// while every moved question still fits in those 3 lines; otherwise it keeps its own title. A short title stays put.
+// Only for a form AskUserQuestion can't show: here, a choice of five.
+const FIVE = ['A', 'B', 'C', 'D', 'E'].map((c) => ({ const: c, title: c }))
+const field = (title: string) => ({ type: 'string', title, oneOf: FIVE })
 const note = { type: 'string', title: 'Additional answer or note' }
 const titled = (id: string, titles: string[]) => ({
   ...QUESTION,
@@ -706,6 +845,238 @@ test('long questions that fit in the shown lines are numbered in the message; a 
     ].join('\n'),
     requestedSchema: { properties: { question_0: field('Answer 1'), question_1: field('Answer 2') } },
   })
+})
+
+const handoff = (why: string) =>
+  [
+    `The codex agent "a1" needs an answer to its harness's question: ${why}.`,
+    '',
+    `Codex keeps working while you answer.\n\n${long(1)}`,
+    'One of: "Yes", "No", or your own text.',
+    '',
+    'Answer with SendMessage to "a1", the message being your answer alone.',
+    '"Decline" declines. The harness waits for your answer.',
+  ].join('\n')
+const noQuestionAnswered = (writes: Write[]) => !inboxOf(writes).some((line) => line.includes('"question"'))
+
+test('"Let Claude answer" hands the question to the main agent, whose message naming an option is the answer, not a steer', async ($, on) => {
+  const writes: Write[] = []
+  const dialog = { shown: [] as Dialog[], answer: picked('Let Claude answer') }
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), CODEX_FORM, ...CAPTURED.slice(10)]) }, { writes, dialog })
+  await spawn($, on)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const first = await runTurn($)
+  expect(first.calls).toContainEqual({ result: 'Handed to the main agent: the person chose "Let Claude answer".' })
+  // The step after the question is this agent's SendMessage to the main agent.
+  expect(sent(first.chunks)).toEqual([
+    {
+      id: expect.stringMatching(/^toolu_via_send_/),
+      to: 'main',
+      summary: 'codex asks you a question',
+      message: handoff('the person chose "Let Claude answer"'),
+    },
+  ])
+  expect(noQuestionAnswered(writes)).toBe(true)
+  const reply = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'Yes, and the footer too', tool_use_id: 'm1' })
+  expect(reply.result).toEqual({
+    success: true,
+    message: 'Answered: {"question_0":"Yes","question_0_note":"and the footer too"} for codex, which goes on.',
+  })
+  const content = { question_0: 'Yes', question_0_note: 'and the footer too' }
+  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content } }))
+  expect(inboxOf(writes)).not.toContain(JSON.stringify('Yes, and the footer too'))
+  const { result } = await runOn($, first.result.index + 1)
+  expect(result.answer).toContain('REDIRECTED')
+})
+
+test("the main agent's answer that fits no option is refused with why, and the question stays open for the next", async ($, on) => {
+  const writes: Write[] = []
+  const dialog = { shown: [] as Dialog[], answer: picked('Let Claude answer') }
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), QUESTION, ...CAPTURED.slice(10)]) }, { writes, dialog })
+  await spawn($, on)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const first = await runTurn($)
+  const wrong = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'qa', tool_use_id: 'm1' })
+  expect(wrong.result).toEqual({
+    success: false,
+    message: 'Not passed on: "Which target?" takes one of "staging", "production". The question is still open; send the answer again.',
+  })
+  expect(noQuestionAnswered(writes)).toBe(true)
+  const right = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'production', tool_use_id: 'm2' })
+  expect(right.result).toMatchObject({ success: true })
+  expect(inboxOf(writes)).toContain(
+    JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content: { target: 'production' } } }),
+  )
+  await runOn($, first.result.index + 1)
+})
+
+test("past the person's askUserQuestionTimeout the dialog goes, and the question goes to the main agent", async ($, on) => {
+  const writes: Write[] = []
+  const dialog = { shown: [] as Dialog[], answer: never }
+  const { clock } = arrange(
+    on,
+    [],
+    { stdout: lines([...CAPTURED.slice(0, 3), CODEX_FORM, ...CAPTURED.slice(10)]) },
+    { writes, dialog, timeout: '60s' },
+  )
+  await spawn($, on)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  let handed = false
+  const turn = runTurn($).finally(() => {
+    handed = true
+  })
+  await clock.settle()
+  expect(dialog.shown).toHaveLength(1)
+  await clock.advance(59_999)
+  expect(handed).toBe(false)
+  await clock.advance(1)
+  const first = await turn
+  expect(first.calls).toContainEqual({ result: "Handed to the main agent: the person didn't answer within 1 minute." })
+  expect(sent(first.chunks)[0]?.message).toBe(handoff("the person didn't answer within 1 minute"))
+  await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'Decline', tool_use_id: 'm1' })
+  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'decline' } }))
+  await runOn($, first.result.index + 1)
+})
+
+test('with no one to ask (-p) the question goes straight to the main agent', async ($, on) => {
+  const writes: Write[] = []
+  const dialog = { shown: [] as Dialog[], answer: picked('Yes') }
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), CODEX_FORM, ...CAPTURED.slice(10)]) }, { writes, dialog })
+  await spawn($, on, true, true)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const first = await runTurn($)
+  expect(dialog.shown).toEqual([])
+  expect(sent(first.chunks)[0]?.message).toBe(handoff('no one can be asked in this session'))
+  await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'No', tool_use_id: 'm1' })
+  await runOn($, first.result.index + 1)
+  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content: { question_0: 'No' } } }))
+})
+
+test('a question handed while another waits on the main agent goes after it, so each answer reaches its own question', async ($, on) => {
+  const writes: Write[] = []
+  const props = CODEX_FORM.requestedSchema.properties
+  const later = {
+    ...CODEX_FORM,
+    id: '7-k1-q2',
+    requestedSchema: { ...CODEX_FORM.requestedSchema, properties: { ...props, question_0: { ...props.question_0, title: long(2) } } },
+  }
+  let open!: () => void
+  const until = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  const pause = { first: lines([...CAPTURED.slice(0, 3), CODEX_FORM, later]), until }
+  const { clock } = arrange(on, [], { stdout: lines(CAPTURED.slice(10)) }, { writes, unheld: true, pause })
+  await spawn($, on, true, true)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const first = await runTurn($)
+  expect(sent(first.chunks).map((s) => s.message)).toEqual([handoff('no one can be asked in this session')])
+  // Codex asks again before the main agent answers: the later question waits, its message not yet sent.
+  const rest = runOn($, first.result.index + 1)
+  await clock.settle()
+  const answer = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'No', tool_use_id: 'm1' })
+  expect(answer.result).toEqual({ success: true, message: 'Answered: {"question_0":"No"} for codex, which goes on.' })
+  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content: { question_0: 'No' } } }))
+  expect(inboxOf(writes).some((line) => line.includes('7-k1-q2'))).toBe(false)
+  // The later question has not been sent: the main agent's next message is a steer, not its answer.
+  const more = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'Yes, and keep going', tool_use_id: 'm0' })
+  expect(more.result).toEqual({ success: true, message: 'Delivered to the running codex agent; codex reads it at its next step.' })
+  expect(inboxOf(writes).some((line) => line.includes('7-k1-q2'))).toBe(false)
+  // With the first answered, the later question goes to the main agent as the run's next step.
+  await clock.advance(10_000)
+  const second = await rest
+  expect(second.calls).toContainEqual({
+    result: 'Handed to the main agent, after the question it was already asked: no one can be asked in this session.',
+  })
+  expect(sent(second.chunks).map((s) => s.message)).toEqual([handoff('no one can be asked in this session').replace(long(1), long(2))])
+  await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'Yes', tool_use_id: 'm2' })
+  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q2', answer: { action: 'accept', content: { question_0: 'Yes' } } }))
+  open()
+  const { result } = await runOn($, second.result.index + 1)
+  expect(result.answer).toContain('REDIRECTED')
+})
+
+test('a hand-off whose run ended while it was being made is never sent, and nothing waits on its answer', async ($, on) => {
+  const writes: Write[] = []
+  const dialog = { shown: [] as Dialog[], answer: picked('Let Claude answer') }
+  let list!: () => void
+  const listed = new Promise<void>((resolve) => {
+    list = resolve
+  })
+  const { clock } = arrange(
+    on,
+    [],
+    { stdout: lines([...CAPTURED.slice(0, 3), CODEX_FORM, ...CAPTURED.slice(10)]) },
+    { writes, dialog, agents: listed },
+  )
+  await spawn($, on)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const turn = runTurn($)
+  await clock.settle()
+  // The person chose "Let Claude answer"; the turn ends while via looks up the agent's name.
+  await $.turn.complete({ turnId: 't1', agentId: 'a1', answer: '', durationMs: 0, isAborted: true, reason: 'aborted' })
+  list()
+  const { calls, chunks } = await turn
+  expect(calls).toContainEqual({ result: 'Not answered' })
+  expect(sent(chunks)).toEqual([])
+  // The run's end closed its inbox: no answer is written to it.
+  expect(noQuestionAnswered(writes)).toBe(true)
+})
+
+test("a foreground agent's question offers no hand-off: its main agent hears nothing until the agent's turn ends", async ($, on) => {
+  const writes: Write[] = []
+  const dialog = { shown: [] as Dialog[], answer: picked('Yes') }
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), CODEX_FORM, ...CAPTURED.slice(10)]) }, { writes, dialog })
+  await spawn($, on, false)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const { chunks } = await runTurn($)
+  expect(dialog.shown[0]?.[0]?.options.map((o) => o.label)).toEqual(['Yes', 'No'])
+  expect(sent(chunks)).toEqual([])
+  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content: { question_0: 'Yes' } } }))
+})
+
+test('a question no one can be asked, from a foreground agent, goes back to codex as a cancel', async ($, on) => {
+  const writes: Write[] = []
+  arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), CODEX_FORM, ...CAPTURED.slice(10)]) }, { writes })
+  await spawn($, on, false, true)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const { calls, chunks } = await runTurn($)
+  expect(sent(chunks)).toEqual([])
+  expect(calls).toContainEqual({ result: 'Not answered' })
+  expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'cancel' } }))
+})
+
+test("once codex withdraws a handed question, the main agent's late message is an ordinary steer", async ($, on) => {
+  const writes: Write[] = []
+  const dialog = { shown: [] as Dialog[], answer: picked('Let Claude answer') }
+  const gate = () => {
+    let open!: () => void
+    const until = new Promise<void>((resolve) => {
+      open = resolve
+    })
+    return { open, until }
+  }
+  const [withdraw, end] = [gate(), gate()]
+  const closed = { relay: 'question_closed', id: CODEX_FORM.id }
+  const pause = {
+    first: lines([...CAPTURED.slice(0, 3), CODEX_FORM]),
+    until: withdraw.until,
+    second: { text: lines([closed]), until: end.until },
+  }
+  const { clock } = arrange(on, [], { stdout: lines(CAPTURED.slice(10)) }, { writes, dialog, unheld: true, pause })
+  await spawn($, on)
+  await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+  const handed = await runTurn($)
+  expect(sent(handed.chunks)).toHaveLength(1)
+  // The next step reads codex's withdrawal, then waits on codex.
+  const rest = runOn($, handed.result.index + 1)
+  withdraw.open()
+  await clock.settle()
+  const late = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'Yes', tool_use_id: 'm1' })
+  expect(late.result).toEqual({ success: true, message: 'Delivered to the running codex agent; codex reads it at its next step.' })
+  expect(inboxOf(writes)).toContain(JSON.stringify('Yes'))
+  expect(noQuestionAnswered(writes)).toBe(true)
+  end.open()
+  await rest
 })
 
 // The question call is the one step call that reaches Claude Code's permission check: auto mode's classifier

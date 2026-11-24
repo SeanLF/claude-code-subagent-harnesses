@@ -668,6 +668,7 @@ test('an Esc that finds the run parked between steps ends the run, so its harnes
     jobs: new Map([['a1', job]]),
     calls: new Map([['toolu_1', { agentId: 'a1', id: 'c1' }]]),
     spawns: new Map(),
+    handed: new Map(),
   }
   const esc = new AbortController()
   esc.abort()

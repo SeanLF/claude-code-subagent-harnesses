@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { drawCall, drawGroup } from './acp/render'
-import { answerCall, CHILD_CALL, endJob, STEP_CALL, waitStep } from './acp/steps'
+import { answerCall, CHILD_CALL, endJob, SEND_CALL, STEP_CALL, waitStep } from './acp/steps'
 import type { Adapter } from './adapter'
 import { waitChild, woken } from './children'
 import { respond, textChunks } from './handback'
@@ -9,7 +9,7 @@ import { cachedModels, refreshModels } from './models'
 import { descriptionOf, isModel, promptOf } from './prompt'
 import { createRecord, recordOf, updateRecord } from './record'
 import { notActivePrompt } from './run'
-import { answerQuestion, sendMessage, steer, typed } from './steer'
+import { answerQuestion, awayWait, sendMessage, showQuestions, steer, typed } from './steer'
 import { adapterOf, turnStep } from './turn'
 import type { World } from './world'
 
@@ -135,6 +135,12 @@ export const register: Register = (on, options) => {
     tool: STEP,
     jobs: new Map(),
     calls: new Map(),
+    handed: new Map(),
+    asking: new Map(),
+    asked: 0,
+    // Until the session says otherwise: a session that never starts here has no -p to tell.
+    interactive: true,
+    background: new Set(),
   }
   // The engine's bounded wait for a run's next chunk (see waitStep). A noun, so the wait is not charged to the hook.
   on('engine.create', async (_, e, next) => {
@@ -148,10 +154,14 @@ export const register: Register = (on, options) => {
       viaChildren: {
         wait: ({ key }: { key: string }) => waitChild(world, key, (wake) => built.clock.after(5_000, wake)),
       },
+      viaQuestions: {
+        away: ({ id, ms }: { id: number; ms: number }) => awayWait(world, id, ms, (after, wake) => built.clock.after(after, wake)),
+      },
     }
   })
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    world.interactive = e.isInteractive
     // Best effort: a hook that throws is skipped whole, and the agents below must still register.
     await $.session
       .model()
@@ -169,7 +179,8 @@ export const register: Register = (on, options) => {
         description: descriptionOf(adapter, models),
         prompt: notActivePrompt(adapter.name),
         // Agent: a harness's own subagents show as agents nested under this one (hooks/acp/children.ts).
-        tools: [world.tool, 'Agent'],
+        // SendMessage: a harness's question handed to the main agent.
+        tools: [world.tool, 'Agent', 'SendMessage'],
         model: adapter.name,
       })
     }
@@ -192,6 +203,12 @@ export const register: Register = (on, options) => {
     const verdict = await next(e)
     const own = e.tool_use_id?.startsWith(STEP_CALL) === true && (e.input as { kind?: unknown } | undefined)?.kind === 'question'
     return own && modeAsks(verdict) ? { decision: 'allow', reason: "via's own call, asking you the harness's question" } : verdict
+  })
+  // A via agent's own SendMessage, handing its harness's question to the main agent, settled the same way.
+  on('tool.check', { tool: 'SendMessage' }, async (_, e, next) => {
+    const verdict = await next(e)
+    const own = e.agentId !== undefined && world.records.has(e.agentId) && e.tool_use_id?.startsWith(SEND_CALL) === true
+    return own && modeAsks(verdict) ? { decision: 'allow', reason: "via's own call, handing its harness's question to you" } : verdict
   })
 
   // Typed into a via agent's view while it runs: Claude Code delivers it at the agent's next step, as an
@@ -227,6 +244,7 @@ export const register: Register = (on, options) => {
       const started = await next({ ...e, model: model ?? adapter.name, ...(model ? { description: `${e.description} · ${model}` } : {}) })
       if (started.agentId) {
         world.nested.set(started.agentId, key)
+        world.background.add(started.agentId)
         await createRecord(world, $, started.agentId, {
           harness: adapter.name,
           nested: true,
@@ -249,6 +267,8 @@ export const register: Register = (on, options) => {
     )
     if (started.agentId && adapter) {
       world.seeds.set(started.agentId, e.prompt)
+      if (e.background) world.background.add(started.agentId)
+      else world.background.delete(started.agentId)
       // agent.list may lag the first step, so the harness is learned at the spawn. mode: what the person
       // allows Claude itself, which a harness maps to its own modes.
       // A resume, or a teammate brought back, is the same agent: its session, choice and answer stay, and only
@@ -305,14 +325,17 @@ export const register: Register = (on, options) => {
     on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => sendMessage(world, $, e, next))
 
   // The matcher's type names only built-in tools; an MCP tool's full name is accepted at run time.
-  // A step call that asks the person goes through to the step server, which asks in Claude Code's own form.
+  // A step call that asks the person asks in Claude Code's AskUserQuestion dialog, or goes through to the step
+  // server, which asks in Claude Code's MCP form.
   on('tool.call', { tool: STEP as 'Bash' }, ($, e, next) =>
     e.tool_use_id !== undefined && world.calls.get(e.tool_use_id)?.question
-      ? answerQuestion($, world, e.tool_use_id, () => next(e))
+      ? answerQuestion($, world, e.tool_use_id, (e as { question?: unknown }).question, (question) => next({ ...e, question } as typeof e))
       : answerCall(world, e.tool_use_id, next.signal, (agentId, turnId) => $.viaSteps.wait({ agentId, turnId })),
   ).catch(() => ({
     deny: 'via could not report this harness tool call.',
   }))
+  // The dialog answerQuestion opens shows the harness's questions.
+  on('tool.call', { tool: 'AskUserQuestion' }, ($, e, next) => showQuestions(world, $, e, next))
 
   on('ui.render', { component: 'ToolUse' }, (_, e, next) => (e.props.tool === world.tool ? drawCall(e.props) : next(e)))
   // Claude Code decides which calls fold; via only counts them, and only a run of its own calls alone.

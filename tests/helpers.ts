@@ -181,6 +181,11 @@ export function testWorld(given: Partial<World> = {}): World {
     tool: 'mcp__plugin_via_step__step',
     jobs: new Map(),
     calls: new Map(),
+    handed: new Map(),
+    asking: new Map(),
+    asked: 0,
+    interactive: true,
+    background: new Set(),
     ...given,
   }
 }
