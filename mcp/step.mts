@@ -1,11 +1,3 @@
-// The server behind via's step tool. A tool.call hook answers every call with what the harness reported,
-// so a call that reaches this server is one nobody answered: it fails, it never runs anything.
-// The one exception is a harness's question to the person that Claude Code's AskUserQuestion dialog can't show
-// (a link to open, a form that doesn't map onto it), which via's hook lets through: the server asks it as an MCP
-// elicitation, so Claude Code shows its own form, and returns the reply for the hook to pass back.
-// A real MCP server, not $.tool.register: Claude Code folds a server's calls into one transcript line,
-// and leaves a registered tool's calls unfolded.
-// Node runs it as is: type stripping is on by default from Node 22.18.
 import { createInterface } from 'node:readline'
 
 type Message = {
@@ -19,7 +11,6 @@ type Message = {
   result?: unknown
   error?: unknown
 }
-// What via's hook passes in a question call: MCP's elicitation request, as the relay printed it.
 type Question = { mode?: unknown; message?: unknown; requestedSchema?: unknown; url?: unknown; elicitationId?: unknown }
 
 const step = {
@@ -34,12 +25,10 @@ const text = (value: string, isError?: true) => ({ content: [{ type: 'text', tex
 const REFUSED = text('via could not report this harness tool call.', true)
 const CANCEL = text(JSON.stringify({ action: 'cancel' }))
 
-// The client's elicitation support, from initialize. An empty elicitation capability is form only, as MCP had it first.
 let elicitation: { form: boolean; url: boolean } = { form: false, url: false }
 const waiting = new Map<string, (reply: Message) => void>()
 let asked = 0
 
-// The question as MCP's elicitation/create, or nothing when the client can't show it.
 function request(q: Question): object | undefined {
   if (typeof q.message !== 'string') return undefined
   if (q.mode === 'url')
@@ -87,7 +76,6 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return
   }
   if (message?.id === undefined) return
-  // The client's reply to a question this server asked.
   if (message.method === undefined) {
     const reply = waiting.get(String(message.id))
     waiting.delete(String(message.id))

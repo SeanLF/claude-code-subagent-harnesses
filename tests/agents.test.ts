@@ -2,7 +2,6 @@ import { expect, mock, type TestBody, test } from 'claude-code/testing'
 import type { AgentRecord } from '../hooks/record'
 import { agentInfo, agentStore, ENV, hang, lines, NODE, node, ROOT, run, type Spawn } from './helpers'
 
-// The agents tool as Claude calls it: what it reads back, what via runs, and what via's store holds after.
 const TOOL = 'mcp__via__agents'
 const MINUTE = 60_000
 type Seeded = Partial<AgentRecord> & { harness: string }
@@ -10,14 +9,12 @@ type Ran = { argv: string[]; cwd?: string; env?: Record<string, string>; stdin?:
 type TestOn = Parameters<TestBody>[1]
 type TestDollar = Parameters<TestBody>[0]
 
-// via's store as another session left it: records, and the index in spawn order (oldest first).
 function stored(on: TestOn, records: Record<string, Seeded>) {
   const store = agentStore(on, records)
   store.held.set('agent-ids', Object.keys(records))
   return store
 }
 
-// Every process the tool runs, answered by `answer` (by argv); Node's own version check is answered as current.
 function processes(on: TestOn, answer: (argv: string[]) => { exitCode: number; stdout: string } = () => ({ exitCode: 0, stdout: '' })) {
   const ran: Ran[] = []
   on('process.run', (_, e) => {
@@ -28,7 +25,6 @@ function processes(on: TestOn, answer: (argv: string[]) => { exitCode: number; s
   return ran
 }
 
-// Claude Code's dialog, answered with `label`, or dismissed; each question it was asked is kept.
 function dialog(on: TestOn, label: string | 'dismiss') {
   const asked: string[] = []
   on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
@@ -74,7 +70,6 @@ test("list shows via's agents newest first, each with the command that opens it 
     },
     { agent: 'c1', harness: 'codex', title: 'fix the build', running: false, command: "cd '/work/my repo' && codex resume cs-1" },
   ])
-  // The service check runs from home, where opencode loads no project's plugins.
   expect(ran).toEqual([{ argv: ['opencode', 'service', 'status'], cwd: '/home/u', env: undefined, stdin: undefined }])
 })
 
@@ -85,7 +80,6 @@ test('an OpenCode session is not offered while no background service runs, which
   const agents = await listed($)
   expect(agents.map((a) => a.command)).toEqual([undefined, undefined])
   expect(String(agents[0]?.why)).toContain('`opencode service start`')
-  // Asked once for the whole list.
   expect(ran).toHaveLength(1)
   const open = await call($, { action: 'open', agent: 'o1' })
   expect(open.isError).toBe(true)
@@ -159,7 +153,6 @@ test('forget of a Codex agent says Codex keeps the session archived, and how to 
   mock.env(on, ENV)
   stored(on, { c1: { harness: 'codex', session: 'cs-1', cwd: '/w' } })
   dialog(on, 'Forget it')
-  // codex-acp, installed as via installs it.
   on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }))
   const ran = processes(on, () => ({
     exitCode: 0,
@@ -262,7 +255,6 @@ test('the tool is registered at session start, behind ToolSearch', async ($, on)
 test("an agent another Claude Code session is running shows as running, and can't be opened mid-run or forgotten", async ($, on) => {
   mock.clock(on)
   mock.env(on, ENV)
-  // Marked by the other session's run, which holds them for another minute.
   stored(on, {
     o1: { harness: 'opencode', session: 'ses_1', cwd: '/w', runningUntil: MINUTE },
     c1: { harness: 'codex', session: 'cs-1', cwd: '/w', runningUntil: MINUTE },
@@ -297,7 +289,6 @@ test('a pi run marks its record while it runs, and clears the mark when it ends'
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const pending = run($)
   await clock.settle()
-  // Held until its own 30 minutes are up, and a minute past.
   expect(store.record('a1')?.runningUntil).toBe(31 * MINUTE)
   await clock.advance(30 * 60 * 1000)
   await pending
@@ -313,9 +304,7 @@ test('forget deletes the session the store holds now, which another session may 
       ? { exitCode: 0, stdout: `${JSON.stringify({ relay: 'forgotten', sessionId: 'ses_new', how: 'deleted' })}\n` }
       : SERVICE_UP(argv),
   )
-  // Read once here: no session yet.
   expect((await listed($))[0]?.why).toBe('it has no opencode session yet.')
-  // Then another session's run gets one.
   store.seed('o1', { harness: 'opencode', session: 'ses_new' })
   expect((await call($, { action: 'forget', agent: 'o1' })).text).toBe(
     "Forgot o1: opencode session ses_new deleted, and via's record removed.",
@@ -335,7 +324,6 @@ test('forget deletes nothing when the session changes, or a run starts, while th
   on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
     const questions = e.questions as { question: string }[]
     const question = questions[0]?.question ?? ''
-    // Meanwhile, elsewhere: o1's session is replaced; o2 starts a run.
     if (question.includes('(o1)')) store.seed('o1', { session: 'ses_9' })
     else store.seed('o2', { runningUntil: MINUTE })
     return { result: { questions, answers: { [question]: 'Forget it' } } }
@@ -384,7 +372,6 @@ test(
           text: `${JSON.stringify({ type: 'message_start', message: { role: 'assistant', provider: 'openrouter', model: 'kimi' } })}\n`,
         }
         await asked
-        // What pi prints when its extension aborts the step.
         const aborted = {
           type: 'message_end',
           message: { role: 'assistant', stopReason: 'error', errorMessage: 'This operation was aborted', usage: { input: 1, output: 1 } },
@@ -398,11 +385,9 @@ test(
     await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
     const pending = run($)
     await clock.settle()
-    // Short: the mock clock fires each 5-second step wait on the way, so long advances cost real time.
     await clock.advance(MINUTE)
     await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'interrupt: now do C', tool_use_id: 'i' })
     await pending
-    // The first run until 3 minutes (its 2, and a minute's grace); the interrupt's, started at 1, until 4.
     expect(marks).toEqual([3 * MINUTE, 4 * MINUTE])
     expect(store.record('a1')?.runningUntil).toBeUndefined()
   },

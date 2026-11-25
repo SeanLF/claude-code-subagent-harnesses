@@ -1,2 +1,1 @@
-/** A 1x1 PNG, base64: the image the fake agent answers with (FAKE_IMAGE). */
 export const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='

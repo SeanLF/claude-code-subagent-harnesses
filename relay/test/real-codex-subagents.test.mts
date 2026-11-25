@@ -1,9 +1,3 @@
-// What Codex tells a client about its own subagents, driven straight through `codex app-server` with the model a
-// local fake (support/fake-model.mts): no relay, no codex-acp, no tokens. This pins Codex's behaviour, not via's:
-// with the v2 subagent tools, a subagent's spawn and follow-up reach the client with no text (openai/codex#61750), so
-// a nested Codex agent's view can't show what it was asked. The v1 tools carry it, and codex-acp reports it
-// (real-codex.test.mts); the model picks which version runs. When this fails, v2 sends the text too: check codex-acp shows it.
-// Skipped when codex is not on PATH.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
@@ -24,11 +18,9 @@ afterEach(async () => {
   await fake.close()
 })
 
-/** An app-server notification, by the fields the test reads. */
 type Notification = { readonly method: string; readonly params?: { readonly threadId?: string; readonly item?: { readonly type: string } } }
 type Answer = { readonly result?: unknown; readonly error?: { readonly message: string } }
 
-// A JSON-RPC client for `codex app-server` over stdio, as codex-acp is. Every wait ends when Codex does.
 function appServer(env: Record<string, string>, cwd: string) {
   const proc = spawn('codex', ['app-server'], { env: { PATH: process.env.PATH, ...env }, cwd })
   const pending = new Map<number, (answer: Answer) => void>()
@@ -61,7 +53,6 @@ function appServer(env: Record<string, string>, cwd: string) {
   const request = (method: string, params: unknown) =>
     new Promise<Answer>((resolve) => {
       const id = next++
-      // A backstop for a Codex that runs but never answers; an exit ends the wait at once.
       const cancel = backstop(20_000, () => {
         pending.delete(id)
         resolve({ error: { message: `no answer to ${method}` } })
@@ -72,7 +63,6 @@ function appServer(env: Record<string, string>, cwd: string) {
       })
       proc.stdin.write(`${JSON.stringify({ id, method, params })}\n`)
     })
-  /** Resolves once Codex has sent a notification `match` picks; rejects if Codex exits first. */
   const until = (match: (n: Notification) => boolean) =>
     new Promise<Notification>((resolve, reject) => {
       const check = () => {
@@ -117,8 +107,6 @@ test("a subagent's spawn and follow-up reach the client with no text: Codex does
       '',
     ].join('\n'),
   )
-  // The child's requests carry the parent's history too, so the child is told apart by the messages the parent
-  // sent it: `agent_message` items.
   const PARENT = 'Delegate this.'
   const fromParent = (body: ModelRequest) =>
     (body.input ?? []).filter((item) => item.type === 'agent_message').map((item) => JSON.stringify(item))
@@ -127,14 +115,12 @@ test("a subagent's spawn and follow-up reach the client with no text: Codex does
       const received = fromParent(body)
       if (received.length > 0) return textResponse(received.at(-1)?.includes(FOLLOWUP) ? 'OSPREY' : 'KESTREL')
       const outputs = (body.input ?? []).filter((item) => item.type === 'function_call_output').length
-      // Codex's multi-agent v2 tools sit in the `collaboration` namespace.
       if (outputs === 0) return functionCallResponse('spawn', 'spawn_agent', { task_name: 'kestrel', message: SPAWN }, 'collaboration')
       if (outputs === 1) return functionCallResponse('followup', 'followup_task', { target: 'kestrel', message: FOLLOWUP }, 'collaboration')
       return textResponse('DONE')
     })
   const server = appServer({ HOME: b.home, CODEX_HOME: codexHome }, b.work)
   try {
-    // A request Codex refuses fails here, with Codex's reason, not later as a wait that never ends.
     const ok = async (method: string, params: unknown) => {
       const answer = await server.request(method, params)
       assert.equal(answer.error, undefined, `${method}: ${answer.error?.message}`)
@@ -147,16 +133,12 @@ test("a subagent's spawn and follow-up reach the client with no text: Codex does
     await ok('turn/start', { threadId, input: [{ type: 'text', text: PARENT }] })
     await server.until((n) => n.method === 'turn/completed' && n.params?.threadId === threadId)
 
-    // Codex gave the child's model both messages. The child runs on its own, so its turn for the follow-up may
-    // still be starting when the parent's ends: wait for that request.
     const received = (made: readonly ModelRequest[]) => made.flatMap(fromParent).join()
     await fake.until((made) => received(made).includes(SPAWN) && received(made).includes(FOLLOWUP), server.exited)
     const items = server.notifications.filter((n) => n.method === 'item/completed').map((n) => n.params)
     const activity = items.filter((p) => p?.item?.type === 'subAgentActivity').map((p) => get(p, 'item', 'kind'))
-    // The child runs on its own: its first answer's `completed` can come before the parent's follow-up.
     assert.equal(activity[0], 'started')
     assert.ok(activity.includes('interacted'), JSON.stringify(activity))
-    // The client saw neither: no text on the activity, and no message on the child's thread.
     const stream = JSON.stringify(server.notifications)
     assert.equal(stream.includes(SPAWN) || stream.includes(FOLLOWUP), false, 'Codex now sends the text: show it in the nested view')
     assert.equal(

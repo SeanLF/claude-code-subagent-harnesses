@@ -202,7 +202,6 @@ test('a pi agent hands its report back through SubagentHandback when the session
   const { result } = await run($)
   expect(result.stopReason).toBe('tool_use')
   expect(result.toolUses[0]?.name).toBe('SubagentHandback')
-  // A later step, as after a compaction, repeats the report as text: Claude Code takes the last text as the result.
   const again = await run($)
   expect(again.result.answer).toBe(result.answer)
   expect(again.result.toolUses).toEqual([])
@@ -239,8 +238,6 @@ test('an auto-mode spawned agent hands back on its first step even without a ses
   expect(result.toolUses[0]?.name).toBe('SubagentHandback')
 })
 
-// Claude Code takes an auto-mode agent's answer only from its handback: plain text, it asks again and
-// then reports the agent sent nothing.
 test('an auto-mode agent hands back what via says before running it, once', async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns, split(lines))
@@ -250,7 +247,6 @@ test('an auto-mode agent hands back what via says before running it, once', asyn
   const { result } = await run($)
   expect(result.answer).toContain('Invalid pi prompt line "model: two words"')
   expect(result.toolUses).toEqual([{ name: 'SubagentHandback', input: { message: result.answer } }])
-  // A later step, as after a compaction, repeats it as text.
   const again = await run($)
   expect(again.result.answer).toBe(result.answer)
   expect(again.result.toolUses).toEqual([])
@@ -322,8 +318,6 @@ test('a step with no turn hands back a saved report that was never delivered', a
   expect(again.result.toolUses).toEqual([])
 })
 
-// Captured 2026-10-28: /background right after a via:opencode spawn. The new process resumed the agent
-// with no turn.start, and via answered "check the plugin is loaded" while loaded (third-cut session 858bcc0d).
 test('a step with no turn and no saved report says the run was cut off, not that via is missing', async ($, on) => {
   arrange(on, [], split(lines))
   const { result } = await run($, { ...STEP, turnId: 't3' })
@@ -351,7 +345,6 @@ test('a spawn keeps its harness in the store, and parallel spawns keep each othe
   expect([...(store.held.get('agent-ids') as string[])].sort()).toEqual(['a1', 'a2'])
 })
 
-// Seen 2026-10-28 after /background: the new process saw no spawn and resumed the agent as general-purpose.
 test("a step from an agent the old process spawned is still via's, not passed to Claude", async ($, on) => {
   mock.env(on, ENV)
   node(on)
@@ -366,10 +359,8 @@ test("a step from an agent the old process spawned is still via's, not passed to
   })
   const { result } = await run($)
   expect(passed).toBe(false)
-  // An auto-mode spawn's handback holds in the new process too, or Claude Code asks for it three times.
   expect(result.toolUses[0]?.name).toBe('SubagentHandback')
   expect(JSON.stringify(result.toolUses[0]?.input)).toContain('pi run was cut off before it answered')
-  // The step after the handback's tool result has no turn either.
   const after = await run($, { ...STEP, index: 1 })
   expect(after.result.toolUses).toEqual([])
   expect(after.result.answer).toContain('pi run was cut off before it answered')
@@ -554,10 +545,8 @@ test('only the last assistant message is the answer', async ($, on) => {
   const { chunks, result } = await run($)
   expect(result.answer).toBe('second\n\n— answered by pi, openrouter/kimi-2')
   expect(result.answer).not.toContain('first')
-  // Each message a block of its own: the answer's block holds only the last.
   const blocks = chunks.filter((c) => c.kind === 'text').map((c) => c.index)
   expect(new Set(blocks).size).toBe(2)
-  // The last model call alone: 2 in, 2 out, not the run's 3 and 3.
   expect(result.usage).toEqual({
     model: 'openrouter/kimi-2',
     input_tokens: 2,
@@ -655,12 +644,10 @@ test('an Esc that finds the run parked between steps ends the run, so its harnes
       yield { kind: 'call-start' as const, id: 'c1', input: { kind: 'execute', title: 'sleep 60' }, usage: null }
       yield { kind: 'call-start' as const, id: 'c2', input: { kind: 'execute', title: 'never' }, usage: null }
     } finally {
-      // Where run stops the harness.
       cleaned = true
     }
     return { stopReason: 'end_turn' } as never
   })()
-  // Parked at its first yield, as after the step that issued the call.
   await gen.next()
   const job = { turnId: 't1', gen, held: [], outputs: new Map(), abort: new AbortController(), count: 0 }
   const w = {
@@ -677,7 +664,6 @@ test('an Esc that finds the run parked between steps ends the run, so its harnes
   })
   await Promise.resolve()
   expect(cleaned).toBe(true)
-  // A step that still reads the ended run ends the turn, never spins on it.
   const next = pump(w, job, { turnId: 't1', index: 1, agentId: 'a1' }, new AbortController().signal, () => new Promise(() => {}))
   let r = await next.next()
   while (!r.done) r = await next.next()
@@ -716,8 +702,6 @@ test('a child-call id via never issued is an ordinary via spawn, whose step runs
   expect(spawns).toHaveLength(1)
 })
 
-// via's own Agent call for a harness subagent: auto mode's classifier gives no verdict on a call no model
-// request made (seen live 2026-10-28), so via settles the mode's ask, and only that.
 test("via settles only the mode's ask on its own Agent call: a deny or a rule's ask still stands", async ($, on) => {
   arrange(on, [], split(lines))
   on('agent.spawn', () => ({ model: 'pi', agentId: 'a1' }))
@@ -726,7 +710,6 @@ test("via settles only the mode's ask on its own Agent call: a deny or a rule's 
   await spawnPi($, 'auto')
   const check = (tool_use_id: string, agentId = 'a1') => $.tool.check({ tool: 'Agent', input: {}, tool_use_id, agentId })
   expect((await check(`${CHILD_CALL}t1_1`)).decision).toBe('allow')
-  // Not via's own call, or not in a via agent's loop: the engine's verdict.
   expect((await check('toolu_model_1')).decision).toBe('ask')
   expect((await check(`${CHILD_CALL}t1_1`, 'x1')).decision).toBe('ask')
   verdict = { decision: 'deny' }
@@ -739,8 +722,6 @@ const piLines = (events: unknown[]) => `${events.map((e) => JSON.stringify(e)).j
 const START = { type: 'message_start', message: { role: 'assistant', provider: 'openrouter', model: 'kimi' } }
 const END = { type: 'message_end', message: { role: 'assistant', usage: { input: 3, output: 4, cacheRead: 1, cacheWrite: 2 } } }
 
-// Seen 2026-11-10 on codex: its last message, then a call its sandbox refused, then the end. Claude Code
-// takes the last step's text as the answer, and that step held only the signature.
 test("an answer said before the run's last call is said again in the last step", async ($, on) => {
   const spawns: Spawn[] = []
   const events = [
@@ -765,9 +746,6 @@ test("an answer said before the run's last call is said again in the last step",
   expect(after.join('')).toBe('I need access to rex.\n\n— answered by pi, openrouter/kimi')
 })
 
-// Found only through agent.list (spawned before via loaded, evicted, or a store that did not answer): its
-// spawn's mode is unknown, so it runs read-only, never with more than the person gave; nothing is stored
-// over the real record.
 test('an agent via has no record of runs read-only, and its made-up record is never stored', async ($, on) => {
   const spawns: Spawn[] = []
   mock.env(on, ENV)
@@ -802,7 +780,6 @@ test('a refusal for an agent via has no record of says why it runs read-only, no
   expect(result.answer).not.toContain('plan mode')
 })
 
-// The step writer's plan rows, shared with nested agents: a row per change, none for a repeated snapshot.
 test("a via agent's plan is a row each time it changes, its entries the row's output", async ($, on) => {
   mock.env(on, { HOME: '/home/u' })
   agentStore(on, { a1: { harness: 'codex' } })

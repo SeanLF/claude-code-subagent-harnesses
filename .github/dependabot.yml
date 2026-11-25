@@ -2,7 +2,7 @@ version: 2
 updates:
   # Actions use major tags; this opens a PR when a new major is out.
   # Dev dependencies are types and the compiler. A harness bump that moves a type
-  # out of reach fails `pnpm typecheck` (see hooks/adapters/pi.ts).
+  # out of reach fails `pnpm typecheck` (see checks/sdk.ts).
   - package-ecosystem: npm
     directory: /
     schedule:

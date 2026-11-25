@@ -1,7 +1,5 @@
 import type { HelpAdapter, PromptAdapter } from './adapter'
 
-// A model never starts with '-': passed as its own argument, it would read as a flag. A pi tool list may
-// (-bash,read removes bash), since it always follows --tools.
 const VALUE = {
   model: /^[A-Za-z0-9_.:/*~@+][A-Za-z0-9_.:/*~@+-]*$/,
   tools: /^[A-Za-z0-9_*+,:.-]+$/,
@@ -25,7 +23,6 @@ export type PromptSpec = {
 
 export const isModel = (value: string) => VALUE.model.test(value)
 
-// pi and OpenCode list hundreds: the help names the first, and the harness's own command finds the rest.
 const LISTED = 30
 
 function helpName(line: string, adapter: PromptAdapter): boolean {
@@ -90,7 +87,6 @@ export function promptOf(text: string, adapter: PromptAdapter): PromptSpec {
   return help ? { prompt, help } : { prompt, ...asked }
 }
 
-// models: the harness's own list, best or default first; empty until via has read it once.
 export function helpOf(adapter: HelpAdapter, models: readonly string[]): string {
   const name = adapter.name
   const shown = models.slice(0, LISTED)
@@ -144,8 +140,6 @@ export function descriptionOf(adapter: HelpAdapter, models: readonly string[]): 
   return `${adapter.about} Top lines: ${top.join(' ')}. \`via-help\` for more.${steer}`
 }
 
-// The offered models closest to one a harness refused, by shared name parts (deepseek, v4, free).
-// The provider, before the first slash, never counts alone: every one of its models shares it.
 export function nearestModels(asked: string, models: readonly string[], count = 3): string[] {
   const parts = (id: string) =>
     new Set(
@@ -156,21 +150,18 @@ export function nearestModels(asked: string, models: readonly string[], count = 
     )
   const provider = (id: string) => (id.includes('/') ? id.slice(0, id.indexOf('/')).toLowerCase() : '')
   const want = parts(asked)
-  return (
-    models
-      .filter((id) => id !== asked)
-      .map((id) => {
-        const have = parts(id)
-        const shared = [...have].filter((p) => want.has(p))
-        const named = shared.filter((p) => p !== provider(id)).length
-        let prefix = 0
-        while (prefix < id.length && id[prefix]?.toLowerCase() === asked[prefix]?.toLowerCase()) prefix += 1
-        return { id, named, prefix, score: shared.length / new Set([...want, ...have]).size }
-      })
-      .filter((m) => m.named > 0)
-      // Ties (gpt-6-lunar shares gpt and 6 with every gpt-6 model) go to the longest common start.
-      .sort((a, b) => b.score - a.score || b.prefix - a.prefix)
-      .slice(0, count)
-      .map((m) => m.id)
-  )
+  return models
+    .filter((id) => id !== asked)
+    .map((id) => {
+      const have = parts(id)
+      const shared = [...have].filter((p) => want.has(p))
+      const named = shared.filter((p) => p !== provider(id)).length
+      let prefix = 0
+      while (prefix < id.length && id[prefix]?.toLowerCase() === asked[prefix]?.toLowerCase()) prefix += 1
+      return { id, named, prefix, score: shared.length / new Set([...want, ...have]).size }
+    })
+    .filter((m) => m.named > 0)
+    .sort((a, b) => b.score - a.score || b.prefix - a.prefix)
+    .slice(0, count)
+    .map((m) => m.id)
 }

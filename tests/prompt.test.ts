@@ -296,12 +296,10 @@ test("an envelope's quoted > and CRLF lines stay out of the task, and unclosed o
   const started = performance.now()
   expect(unwrapped(unclosed)).toBe(unclosed)
   expect(performance.now() - started).toBeLessThan(1000)
-  // Nested or stray envelopes are not unwrapped at all.
   const nested = '<teammate-message a="1"><teammate-message b="2">x</teammate-message></teammate-message>'
   expect(unwrapped(nested)).toBe(nested)
 })
 
-// As Claude Code 2.1.310 resumes an agent that answered, captured from a live SendMessage.
 const resumed = (message: string) =>
   `The coordinator sent a message while you were working:\n${message}\n\nAddress this before completing your current task.`
 
@@ -335,10 +333,8 @@ test('a refused model is matched to the offered ones that share its name parts, 
     'opencode/beam-free',
     'openrouter/deepseek/deepseek-v4-flash',
   ])
-  // The provider alone matches nothing: every opencode model shares it.
   expect(nearestModels('opencode/zzz', offered)).toEqual([])
   expect(nearestModels('gpt-6-luna', [])).toEqual([])
-  // Captured 2026-10-28 from codex's list: a tie on name parts goes to the longest common start.
   expect(nearestModels('gpt-6-lunar', ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'])[0]).toBe('gpt-6-luna')
 })
 

@@ -1,16 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 
-// Delivers each new line appended to $PI_INBOX to the running agent: a string as a steer, and
-// {interrupt} by aborting the current step. In print mode pi then exits; via runs the message next.
 export default function (pi: ExtensionAPI) {
   const path = process.env.PI_INBOX
   let timer: ReturnType<typeof setInterval> | undefined
   let offset = 0
   pi.on('session_start', (_event, ctx) => {
     if (!path || timer) return
-    // The plugin creates the inbox empty right before spawning, so everything
-    // in it belongs to this run, including anything written before this event.
     offset = 0
     timer = setInterval(() => {
       if (!existsSync(path)) return

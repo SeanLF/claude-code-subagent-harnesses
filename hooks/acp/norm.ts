@@ -1,4 +1,3 @@
-// What a harness run says, normalized: every adapter's parser yields these, and the core reads them.
 export type Usage = {
   readonly input: number
   readonly cacheRead: number
@@ -7,29 +6,22 @@ export type Usage = {
 }
 
 export type Norm =
-  | { readonly k: 'message' } // a new assistant message starts: only the last one is the answer
-  | { readonly k: 'session'; readonly id: string } // harness-issued id, saved at once for follow-ups
+  | { readonly k: 'message' }
+  | { readonly k: 'session'; readonly id: string }
   | { readonly k: 'model'; readonly name: string }
   | { readonly k: 'text' | 'thinking' | 'tool'; readonly t: string }
-  // A harness tool call that starts, then ends: each becomes a call to the plugin's own tool in Claude Code's
-  // transcript, its row drawn by the plugin. A harness that reports only `tool` keeps a text line instead.
-  // path: the file the call acts on, when the agent names one (its row links to it).
   | { readonly k: 'call'; readonly id: string; readonly kind: string; readonly title: string; readonly path?: string }
   | { readonly k: 'called'; readonly id: string; readonly output: string; readonly failed: boolean }
-  // The agent's plan, whole, each time it changes.
   | { readonly k: 'plan'; readonly entries: readonly { readonly content: string; readonly status: string }[] }
-  | { readonly k: 'usage'; readonly usage: Usage } // the core keeps the last one: per message, never a running total
+  | { readonly k: 'usage'; readonly usage: Usage }
   | { readonly k: 'steered' }
   | { readonly k: 'error'; readonly message: string }
-  | { readonly k: 'unfinished'; readonly why: string } // the prompt ended unfinished: a refusal or a limit
-  | { readonly k: 'notice'; readonly t: string } // said after the answer, as part of it
-  | { readonly k: 'interrupted' } // the harness took an interrupt itself: nothing for the core to rerun
-  | { readonly k: 'ask'; readonly ask: Ask } // a permission question for the person; the core writes the answer to the inbox
-  | { readonly k: 'question'; readonly question: Question } // a question the harness asks the person (ACP elicitation)
-  | { readonly k: 'question-closed'; readonly id: string } // one that no longer needs an answer: an interrupt, or the harness withdrew it
-  // A subagent the harness started (ACP's subagent_update), announced or updated: parent is the session that
-  // owns it, state its current work (idle: done for now), failure why its work ended, when it failed or
-  // ended unfinished; cancelled, when its work was cancelled (most often by its parent's interrupt).
+  | { readonly k: 'unfinished'; readonly why: string }
+  | { readonly k: 'notice'; readonly t: string }
+  | { readonly k: 'interrupted' }
+  | { readonly k: 'ask'; readonly ask: Ask }
+  | { readonly k: 'question'; readonly question: Question }
+  | { readonly k: 'question-closed'; readonly id: string }
   | {
       readonly k: 'child'
       readonly id: string
@@ -40,9 +32,7 @@ export type Norm =
       readonly failure?: string
       readonly cancelled?: boolean
     }
-  | { readonly k: 'of'; readonly child: string; readonly norm: Norm } // what a subagent's own session said
-  // A message from another session (ACP's session_message): to a subagent, inside `of`, its task or a later
-  // instruction; to the run's own session, from its subagent or another session.
+  | { readonly k: 'of'; readonly child: string; readonly norm: Norm }
   | { readonly k: 'told'; readonly t: string }
 
 export type Ask = {
@@ -53,13 +43,9 @@ export type Ask = {
   readonly options: readonly { readonly optionId: string; readonly name: string; readonly kind: string }[]
 }
 
-// A harness's question to the person, as the relay prints it: MCP's elicitation request, which ACP's is adapted
-// from, so a client that shows MCP's form can show it unchanged. form: fields to fill (a JSON Schema object);
-// url: a page to open, as for a sign-in.
 export type Question = { readonly id: string; readonly message: string } & (
   | { readonly mode: 'form'; readonly requestedSchema: Readonly<Record<string, unknown>> }
   | { readonly mode: 'url'; readonly url: string; readonly elicitationId: string }
 )
 
-// Claude Code's permission mode, as the spawn carried it: what the person allows Claude itself.
 export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk'

@@ -4,10 +4,6 @@ import { relayReady } from './install'
 import { type AgentRecord, forgetRecord, freshRecord, listRecords } from './record'
 import type { World } from './world'
 
-// One tool Claude calls for the via agents in via's store (its newest 50, across sessions and projects): list
-// them, get the command that opens one in its harness's own UI, or forget one, harness session and all.
-// Claude runs the command, in a pane if it likes; via opens nothing itself.
-
 type Engine = Pick<EngineInterface, 'store' | 'ui' | 'process' | 'env' | 'fs' | 'plugin' | 'clock'>
 
 export const AGENTS_TOOL = 'agents'
@@ -33,10 +29,8 @@ export const AGENTS_SPEC = {
 
 const quote = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`)
 
-// The harness's session for an agent: issued by the harness, or named by via (pi).
 const sessionOf = (adapter: Adapter, agentId: string, record: AgentRecord) => record.session || adapter.sessionOf?.(agentId)
 
-// Running here, or by its record's mark from any session, until the deadline the running session set (record.ts).
 async function running($: Engine, w: World, agentId: string, record: AgentRecord): Promise<boolean> {
   if (w.jobs.has(agentId)) return true
   return record.runningUntil !== undefined && (await $.clock.now()) < record.runningUntil
@@ -44,7 +38,6 @@ async function running($: Engine, w: World, agentId: string, record: AgentRecord
 
 type Opening = { command: string; note?: string } | { why: string }
 
-// services: each harness's service check, asked once per call.
 type Services = Map<string, Promise<boolean>>
 
 async function opening($: Engine, w: World, agentId: string, record: AgentRecord, services: Services = new Map()): Promise<Opening> {
@@ -125,7 +118,6 @@ async function forget($: Engine, w: World, agentId: string, record: AgentRecord)
   const answer = await $.ui.ask(question, { header: 'via', options: [FORGET, 'Keep it'] }).catch(() => undefined)
   if (answer === undefined) return failed(`Not forgotten: nobody answered the question (a -p run, or the dialog was dismissed).`)
   if (answer !== FORGET) return { result: `Not forgotten: the person chose "${answer}".` }
-  // The person may take a while: a run may have started, here or elsewhere, or the session changed meanwhile.
   const now = await freshRecord(w, $, agentId)
   if (now === undefined) return { result: `${agentId} was already forgotten.` }
   if (await running($, w, agentId, now)) return failed(busy)
@@ -137,7 +129,6 @@ async function forget($: Engine, w: World, agentId: string, record: AgentRecord)
     if (typeof ready === 'string') return failed(`Not forgotten: ${ready}`)
     const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
     const request = adapter.forget.request({ root: $.plugin.root, session, installed: ready.installed })
-    // From home, as the model listing runs: in a project, the harness would load that project's own config and plugins.
     const ran = await $.process
       .run([...request.argv], { env: request.env, stdin: '', ...(home ? { cwd: home } : {}), timeoutMs: 60_000 })
       .catch((error: unknown) => ({ exitCode: -1, stdout: '', stderr: String(error) }))

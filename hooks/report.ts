@@ -20,7 +20,7 @@ export function finish(args: {
   readonly steered: number
   readonly inbox: Inbox | undefined
   readonly total: Totals
-  readonly writer: StepWriter // the run's: an answer said before its last step-ending chunk is said again
+  readonly writer: StepWriter
 }): Finished {
   const name = args.adapter.name
   const chunks: TurnStepChunk[] = []
@@ -33,15 +33,12 @@ export function finish(args: {
     report = partial ? `${partial}\n\n${notice}` : notice
     say(partial ? `\n\n${notice}` : notice)
   }
-  // Before a failure, not dropped by it: a warning, such as a model reroute, may be why it failed.
   if (args.notices.length > 0) {
     const partial = report.trim()
     const said = args.notices.join('\n')
     report = partial ? `${partial}\n\n${said}` : said
     say(partial ? `\n\n${said}` : said)
   }
-  // A failure keeps what the harness said before it, as a failed nested child does: a reply cut off at a
-  // limit is still the reply so far.
   if (args.failure) {
     const partial = report.trim()
     report = partial ? `${partial}\n\n${args.failure}` : args.failure
@@ -65,7 +62,6 @@ export function finish(args: {
       }
     : null
   const answer = report.trim()
-  // A genuine answer is always signed; an unknown model is said, never guessed.
   const signedBy = args.stopped === undefined && !args.failure
   const by = named === '' ? 'model not reported' : requested === named ? `${named} (requested)` : named
   const line = `\n\n${answeredBy(name, by)}`

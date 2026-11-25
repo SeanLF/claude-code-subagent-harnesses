@@ -1,5 +1,4 @@
 {
-  "//": "The relay runs under Node, bundled by esbuild.",
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "module": "nodenext",

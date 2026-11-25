@@ -12,7 +12,6 @@ const call = (index: number): RenderPropsOf['ToolGroup']['calls'][number] & { to
   isInterrupted: false,
 })
 
-// A drawn element, not an engine reference.
 type Drawn = Exclude<RenderElement, { type: 'engine' }>
 
 const textOf = (node: unknown): string =>

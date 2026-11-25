@@ -24,7 +24,6 @@ test("an ACP agent's compaction is one row, its summary the row's output after t
   expect(parse(update({ sessionUpdate: 'compaction_update', compactionId: 'c1', status: 'completed' }))).toEqual([
     { k: 'called', id: 'compaction:c1', output: '412k tokens\n\nKept the plan.', failed: false },
   ])
-  // A repeated terminal update ends nothing twice.
   expect(parse(update({ sessionUpdate: 'compaction_update', compactionId: 'c1', status: 'completed' }))).toEqual([])
 })
 
@@ -43,7 +42,6 @@ test("pi's compaction is a row with its sizes and summary; a failed one names it
   expect(line({ type: 'compaction_start', reason: 'threshold' })).toEqual([
     { k: 'call', id: 'pi-compaction-1', kind: 'compact', title: 'conversation' },
   ])
-  // pi's docs/json.md sample, as written there.
   const result = {
     summary: 'Summary of conversation...',
     firstKeptEntryId: 'abc123',

@@ -9,9 +9,6 @@ const SID = 'ab90f86d-4ea3-4fc4-8e4c-be096307339b'
 const update = (u: Record<string, unknown>) => ({ sessionId: SID, update: u })
 const text = (sessionUpdate: string, t: string) => update({ content: { text: t, type: 'text' }, sessionUpdate })
 const used = (n: number) => update({ used: n, size: 1048576, sessionUpdate: 'usage_update' })
-// Captured from relay/relay.mjs over `agy acp --sandbox` (agy 1.5.16, gemini-3.8-flash, thought_level medium,
-// 2026-11-24), trimmed: the folder written /w, rawInput, config options and commands dropped, thinking cut short.
-// agy sends no message ids, a command's output under its own header, and its context in each usage_update.
 const CAPTURED = [
   { relay: 'session', sessionId: SID, cwd: '/w' },
   { relay: 'model', name: 'gemini-3.8-flash' },
@@ -102,7 +99,6 @@ const CAPTURED = [
   },
   { relay: 'done', stopReason: 'end_turn' },
 ]
-// Captured the same way: a command that exits 1. agy reports it completed.
 const FAILED = [
   { relay: 'session', sessionId: SID, cwd: '/w' },
   { relay: 'model', name: 'gemini-3.8-flash' },
@@ -149,7 +145,6 @@ const AGENT = agentInfo({ id: 'a1', description: 'x', type: 'via:agy' })
 function arrange(
   on: TestOn,
   spawns: Spawn[],
-  // record: what the agent's record holds at the start, as an earlier turn or process left it.
   out: { stdout?: string; stderr?: string; code?: number; record?: Partial<AgentRecord> } = { stdout: lines(CAPTURED) },
 ) {
   mock.clock(on)
@@ -192,7 +187,6 @@ test('only the text after the last tool call is the answer, signed with the sess
     { kind: 'edit', title: 'File a.txt', path: '/w/a.txt' },
     { kind: 'execute', title: 'cat a.txt' },
   ])
-  // What Claude reads back from the edit and the command: the command's output without agy's header.
   expect(calls[1]).toEqual({ result: 'a.txt\n- one\n+ two' })
   expect(calls[2]).toEqual({ result: 'two' })
   expect(chunks.some((c) => c.kind === 'thinking' && c.text.includes('editing a file'))).toBe(true)
@@ -236,8 +230,6 @@ test("bypass mode approves what agy asks, and runs its commands outside agy's sa
   expect(spawns[0]?.argv).toEqual(['node', `${ROOT}/relay/relay.mjs`, '--', 'agy', 'acp'])
 })
 
-// Live on agy 1.5.16, every question denied: under its strict setting accept-edits made the edit and ran no command;
-// under request-review auto did both, and default neither. strict holds auto to its own rules.
 for (const [mode, agentMode] of [
   ['acceptEdits', 'accept-edits'],
   ['auto', 'auto'],

@@ -1,5 +1,4 @@
 {
-  "//": "The hooks run in Claude Code's engine: no DOM, no Node.",
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["es2023"],

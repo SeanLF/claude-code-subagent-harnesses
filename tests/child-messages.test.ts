@@ -3,10 +3,6 @@ import { agentInfo, agentStore, NODE, run, runTurn, STEP } from './helpers'
 
 type On = Parameters<TestBody>[1]
 
-// Recorded 2026-11-16 from relay/relay.mjs over codex-acp 2.6.1-preview.5 (codex-cli 0.169.0, multi_agent, the
-// model a scripted fake): the parent spawns a subagent, waits, sends it a follow-up, waits, answers. ACP's
-// subagents RFD reports each task as a session_message: the parent's outgoing view first, then the child's
-// incoming one, linked by senderMessageId. Trimmed to the lines via reads.
 const ROOT = '01a1e57c-7bc9-7d4e-a1d2-3b1a6f708960'
 const CHILD = `${ROOT}:subagent:01a1e57c-7be1-7ab2-a812-b6e94b843265`
 const TASK = 'Reply with only the word KESTREL.'
@@ -82,7 +78,6 @@ function arrange(on: On, lines: readonly unknown[]) {
   })
 }
 
-// The parent's steps to its answer: the Agent calls it made, each a nested agent Claude Code shows.
 async function agentCalls($: Parameters<TestBody>[0]) {
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'Delegate this.' })
   const calls: unknown[] = []
@@ -131,7 +126,6 @@ test("codex's role `default` says nothing, so only the title shows", async ($, o
 })
 
 test("a task with no announcement or outgoing view still reaches the nested agent's prompt, from the child's own view", async ($, on) => {
-  // Only the incoming view, unlinked, before the child's work: as the RFD lets an agent send it.
   const lone = { ...incoming('m1', 'spawn', TASK), update: { ...incoming('m1', 'spawn', TASK).update, senderMessageId: undefined } }
   arrange(on, [
     RECORDED[0],
@@ -147,8 +141,6 @@ test("a task with no announcement or outgoing view still reaches the nested agen
 })
 
 test("a follow-up sent while the subagent works is a row in its nested agent's view, said once and not its answer", async ($, on) => {
-  // The order of the day's recording with the follow-up sent before the child's first reply (relay/test/
-  // real-codex.test.mts): its messages, then the child's one answer. Codex dropped the reply it was writing.
   arrange(on, [
     ...RECORDED.slice(0, 8),
     outgoing('followup', FOLLOWUP),

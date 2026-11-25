@@ -1,7 +1,3 @@
-// The relay against testy, the ACP Rust SDK's deterministic reference agent (ci/testy builds it; ACP_TESTY names
-// another build): every update and callback the protocol has, no model, no tokens. What testy sends is ACP's own
-// coverage of a client, so this is where the relay meets updates the harnesses rarely send. Skipped without testy.
-
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -22,8 +18,6 @@ import {
   updates,
 } from './support/relay-run.mts'
 
-// Built outside the plugin's folder: Cargo hard-links its build output, and `claude plugin eval` refuses a plugin
-// with hard-linked files. CI builds it in place and names it with ACP_TESTY.
 const built = join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'via/testy')
 const testy = process.env.ACP_TESTY ?? join(built, 'debug/testy')
 const skip = existsSync(testy)
@@ -42,8 +36,6 @@ test('an echo streams back as the answer, and the run ends done', { skip }, asyn
   assert.equal(relayEvent(r.events, 'done')?.stopReason, 'end_turn')
 })
 
-// What testy sends is its own to change (rust-sdk moves it along main), so these check what reaches the relay's
-// output, not testy's script: each kind it sends gets through, and what via reads off each arrives intact.
 test("session_updates: every kind of update testy sends reaches the relay's output", { skip }, async () => {
   const r = await run('session_updates')
   assert.equal(r.status, 0, r.stderr)
@@ -98,7 +90,6 @@ test("tool_calls: each call reaches the output through its lifecycle, its paths 
   assert.ok(ids.length >= 2)
   for (const id of ids) {
     const seen = calls.filter((u) => u.toolCallId === id)
-    // Announced first, then updated, ending completed.
     assert.equal(seen[0]?.sessionUpdate, 'tool_call')
     assert.equal(seen.at(-1)?.status, 'completed')
   }
@@ -145,7 +136,6 @@ test('a steer sent as a second prompt is answered while the first turn still run
 })
 
 test("a mode testy offers is set; a model it doesn't offer ends the run with testy's reason", { skip }, async () => {
-  // testy reports the session's current mode in its updates: the mode the relay set.
   const moded = await run('session_updates', { RELAY_AGENT_MODE: 'plan' })
   assert.equal(moded.status, 0, moded.stderr)
   const mode = updates(moded.events).find((u) => u.sessionUpdate === 'current_mode_update')
@@ -158,8 +148,6 @@ test("a mode testy offers is set; a model it doesn't offer ends the run with tes
   )
 })
 
-// testy's questions (callbacks and elicitations ask them all), one at a time, each waiting for its answer: the
-// answers cover accept, decline and cancel.
 const REPLIES = [
   { action: 'accept', content: { name: 'via' } },
   { action: 'decline' },
@@ -192,8 +180,6 @@ test('callbacks: a permission ask reaches the plugin, and its answer goes back t
   assert.ok(options.some((o) => get(o, 'optionId') === 'reject_once'))
   send(b.inbox, { answer: ask.id, optionId: 'reject_once' })
   await answerQuestions(r, b.inbox)
-  // testy goes on past each request once it has the answer: the run ends on its own, not by the backstop,
-  // which is what ends one whose answer never arrived.
   await r.exited
   assert.equal(r.stderr.includes('stopped after'), false, r.stderr)
   assert.equal(relayEventsNamed(r.events, 'ask').length, 1)
@@ -203,7 +189,6 @@ test("elicitations: each of testy's questions reaches the plugin, form and link,
   const b = sandbox()
   const r = startRelay({ agent: [testy], prompt: 'elicitations', cwd: b.work, env: { ...QUIET, RELAY_INBOX: b.inbox }, backstopMs: 10_000 })
   await answerQuestions(r, b.inbox)
-  // The run ends on its own once testy has every answer, not by the backstop.
   assert.equal(await r.exited, 0, r.stderr)
   assert.equal(r.stderr.includes('stopped after'), false, r.stderr)
   const asked = relayEventsNamed(r.events, 'question')

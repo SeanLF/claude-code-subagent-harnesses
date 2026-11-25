@@ -1,4 +1,3 @@
-// rust-sdk's own src/agent-client-protocol-test/src/bin/testy.rs, v1 only: Cargo builds no dependency's binaries.
 use agent_client_protocol::ConnectTo;
 
 #[tokio::main]

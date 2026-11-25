@@ -6,8 +6,6 @@ import type { World } from '../hooks/world'
 type TestDollar = Parameters<TestBody>[0]
 type TestOn = Parameters<TestBody>[1]
 
-// An agent as agent.list lists it, running: its other fields as Claude Code fills them for a new one. Built
-// apart, then returned: Claude Code 2.1.326 requires these fields, and 2.1.325 (CI's) has none of them.
 export const agentInfo = (agent: Pick<AgentInfo, 'id' | 'description' | 'type'>): AgentInfo => {
   const info = {
     status: 'running' as const,
@@ -55,8 +53,6 @@ export async function run($: TestDollar, step: typeof STEP = STEP) {
   }
 }
 
-// Runs a turn to its end as the engine would: each step that ends with a call to via's tool gets the
-// call answered through tool.call, then the next step. calls: what each answer said.
 export async function runTurn($: TestDollar, step: typeof STEP = STEP) {
   const chunks: TurnStepChunk[] = []
   const calls: unknown[] = []
@@ -90,11 +86,9 @@ export function bottom(on: TestOn, writes?: Write[] | 'reject', env: Record<stri
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_, e, next) => next(e))
   node(on, version)
-  // The record a1's spawn left: an agent with none would run read-only, its mode unknown.
   return agentStore(on, { a1: { harness: 'pi' } })
 }
 
-// Every harness checks Node first, for the step server: a current one, and anything else run passes on.
 export const NODE = { exitCode: 0, stdout: '26.12.1\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 export function node(on: TestOn, version = NODE.stdout) {
   on('process.run', (_, e, next) => (e.argv[0] === 'node' ? { value: { ...NODE, stdout: version } } : next(e)))
@@ -162,7 +156,6 @@ export function hold(on: TestOn, spawns: Spawn[], writes: Write[], before: unkno
   return { release }
 }
 
-// A World for a test that drives via's functions without the engine: what a fresh register makes.
 export function testWorld(given: Partial<World> = {}): World {
   return {
     adapters: new Map(),
@@ -191,13 +184,10 @@ export function testWorld(given: Partial<World> = {}): World {
   }
 }
 
-// Agent records as the store holds them, for a test that starts where another process left off. Writes
-// to the store are kept in `written`, by key.
 export function agentStore(on: TestOn, records: Record<string, Partial<AgentRecord> & { harness: string }> = {}) {
   const held = new Map<string, unknown>(
     Object.entries(records).map(([id, record]) => [`agent:${id}`, { handback: false, mode: 'default', ...record }]),
   )
-  // Only via's agent keys: a model list or anything else goes on to the test's own hooks, or none.
   const ours = (key: string) => key.startsWith('agent')
   on('store.get', (_, e, next) => (ours(e.key) ? { value: held.get(e.key) } : next(e)))
   on('store.set', (_, e, next) => {
@@ -212,7 +202,6 @@ export function agentStore(on: TestOn, records: Record<string, Partial<AgentReco
   })
   return {
     record: (id: string) => held.get(`agent:${id}`) as AgentRecord | undefined,
-    // What another process, or the spawn, left for this agent.
     seed: (id: string, record: Partial<AgentRecord>) => {
       held.set(`agent:${id}`, { handback: false, mode: 'default', harness: 'pi', ...(held.get(`agent:${id}`) as object), ...record })
     },

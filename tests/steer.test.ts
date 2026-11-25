@@ -20,8 +20,6 @@ test('a SendMessage to a live pi agent is steered into its inbox', async ($, on)
   await pending
 })
 
-// Captured 2026-10-28: a message typed into a running via agent's view reaches it only as this attachment,
-// at its next step, which no model reads.
 const TYPED = (text: string) =>
   `<system-reminder>\nThe user sent a new message while you were working:\n${text}\n\nThis is how Claude Code surfaces messages the user sends mid-turn — within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.\n</system-reminder>`
 const QUEUED = (agentId: string, text: string) => ({
@@ -72,7 +70,6 @@ test("a queued delivery the person did not type, or whose framing is not a typed
   const pending = run($)
   await clock.settle()
   const before = writes.length
-  // Found by review: a nested agent's end, a peer's or a channel's message ride the same attachment.
   await $.session.append({ ...QUEUED('a1', 'from a notification'), origin: { kind: 'task-notification' } })
   const raw = { type: 'text' as const, text: '<task-notification>\n<status>completed</status>\n</task-notification>' }
   await $.session.append({ ...QUEUED('a1', 'x'), message: { ...QUEUED('a1', 'x').message, content: [raw] } })
@@ -255,7 +252,6 @@ test('an interrupt: message aborts the running pi step, then runs on the same se
         text: `${JSON.stringify(start)}\n${JSON.stringify({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'sleep 30' } })}\n`,
       }
       await asked
-      // What pi prints when its extension aborts the step (captured from pi -p --mode json).
       const aborted = {
         type: 'message_end',
         message: { role: 'assistant', stopReason: 'error', errorMessage: 'This operation was aborted', usage: { input: 1, output: 1 } },
@@ -278,7 +274,6 @@ test('an interrupt: message aborts the running pi step, then runs on the same se
   expect(writes.find((w) => w.text.includes('"interrupt"'))?.text.split('\n')).toContain(JSON.stringify({ interrupt: 'stop and do C' }))
   const { chunks, result } = await pending
   expect(spawns).toHaveLength(2)
-  // pi's session id is fixed per agent, so the same argv resumes the same session.
   expect(spawns[1]?.argv).toEqual(spawns[0]?.argv)
   expect(spawns[1]?.argv).toEqual(expect.arrayContaining(['--session-id', 'pi-a1']))
   expect(spawns[1]?.input).toBe('also do B\n\nstop and do C')
@@ -332,9 +327,7 @@ test('a dialog whose question the harness closed is answered at once with no ans
   const question = { question: 'Ship it?', header: 'Ship', multiSelect: false, options: [{ label: 'Yes' }, { label: 'No' }] }
   const pending: Pending = { id: 1, questions: [question] as never, stop: stop.signal, done: new Promise(() => {}) }
   const w: Asking = { asking: new Map([[1, pending]]), asked: 1, interactive: true, background: new Set() }
-  // No askUserQuestionTimeout: only the harness closing the question can end this dialog.
   const $ = { settings: { read: async () => undefined }, viaQuestions: { away: async () => false } } as never
-  // The person never answers: Claude Code's dialog, beneath via's hook, never settles.
   const person = (() => new Promise<never>(() => {})) as never
   const shown = showQuestions(w, $, { questions: [question] } as never, person)
   stop.abort()

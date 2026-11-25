@@ -19,7 +19,6 @@ export const cutOff = (name: string) =>
   `This ${name} run was cut off before it answered, as happens when the session is sent to the background. Send the task again to run it.`
 export const notActivePrompt = (name: string) =>
   `You are not ${name}: this plugin did not take this step. Use no tools and do not attempt the task. Reply with exactly this and nothing else:\n\n${notActive(name)}`
-// interrupted: an `interrupt:` message aborted the harness on purpose; next is what to run in its place.
 export type RunResult = { aborted: boolean; signed: string; usage: TurnUsage | null; block: number; next?: string }
 export type RunInput = {
   agentId: string
@@ -28,28 +27,27 @@ export type RunInput = {
   signal: AbortSignal
   inbox: Inbox | undefined
   session: string | undefined
-  block?: number // the first content block, after an interrupted run's
+  block?: number
   guard: Readonly<Record<string, string>> | undefined
   mode: Mode
   installed?: string
-  models?: readonly string[] // the harness's offered models, for a refused model's nearest
+  models?: readonly string[]
   save(session: string): Promise<void>
 }
 
-// What a run has heard so far, as the harness's events come in.
 type RunState = {
   readonly writer: StepWriter
-  issued?: string // a session id the harness just issued, not yet saved
-  latest: string | undefined // the run's session: the one it resumed, or the one it issued
+  issued?: string
+  latest: string | undefined
   answeredBy: string
   readonly notices: string[]
-  error: string // the run's failure as said, cleared by a later model call
+  error: string
   steered: number
   readonly compacting: Set<string>
-  compacted: boolean // a /compact prompt that compacted and said nothing has the compaction as its answer
+  compacted: boolean
   readonly asks: Ask[]
-  readonly open: Map<string, string> // calls announced and not yet reported done, by id, with their titles
-  readonly last: Totals // the last model call's usage: Claude Code reads input + cache as the agent's context
+  readonly open: Map<string, string>
+  readonly last: Totals
 }
 type Context = { readonly w: World; readonly agentId: string; readonly adapter: Adapter; readonly type: string; readonly inbox?: Inbox }
 
@@ -61,15 +59,12 @@ const usageOf = (s: RunState, adapter: Adapter): TurnUsage => ({
   cache_creation_input_tokens: s.last.cacheWrite,
 })
 
-// Calls announced and not reported done: an interrupt or the run's end closes them as failed, or their rows
-// would stay running and via's tool.call hook would wait on them.
 function closeOpen(s: RunState, why: string): Mark[] {
   const marks = [...s.open.keys()].map((id): Mark => ({ kind: 'call-end', id, output: why, failed: true }))
   s.open.clear()
   return marks
 }
 
-// One event of the harness's, into the run's state and what it shows.
 function take(s: RunState, c: Context, event: Norm): (TurnStepChunk | Mark)[] {
   switch (event.k) {
     case 'message':
@@ -83,7 +78,6 @@ function take(s: RunState, c: Context, event: Norm): (TurnStepChunk | Mark)[] {
       s.answeredBy = event.name
       return []
     case 'usage':
-      // The last model call, never the run's sum: cost accuracy is traded for a right context size.
       Object.assign(s.last, event.usage)
       s.error = ''
       return []
@@ -91,7 +85,6 @@ function take(s: RunState, c: Context, event: Norm): (TurnStepChunk | Mark)[] {
       s.steered += 1
       return []
     case 'interrupted':
-      // The harness ran the interrupt itself: nothing for the core to rerun or call undelivered.
       if (c.inbox) c.inbox.interrupt = undefined
       return closeOpen(s, 'interrupted')
     case 'ask':
@@ -100,7 +93,6 @@ function take(s: RunState, c: Context, event: Norm): (TurnStepChunk | Mark)[] {
     case 'question-closed':
       return [{ kind: 'question-closed', id: event.id }]
     case 'question':
-      // A step call that via's hook lets through to the step server, which asks in Claude Code's own form.
       return [
         s.writer.call(
           event.question.id,
@@ -135,15 +127,12 @@ function take(s: RunState, c: Context, event: Norm): (TurnStepChunk | Mark)[] {
       return [{ kind: 'call-end', id: event.id, output: event.output, failed: event.failed }]
     case 'child':
     case 'of': {
-      // Only a spawn, a step of its own, ends the text block it falls in.
       const marks = route(c.w, c.agentId, c.type, event)
       if (marks.length > 0) s.writer.boundary()
       return marks
     }
-    // From its subagent or another session: a row in its view, as a nested agent's is.
     case 'told':
       return s.writer.told(event.t)
-    // A tool call the harness gave no id: a line of text, as it cannot be matched to its end.
     case 'tool':
       return [s.writer.say(event.t)]
     default: {
@@ -153,10 +142,6 @@ function take(s: RunState, c: Context, event: Norm): (TurnStepChunk | Mark)[] {
   }
 }
 
-// What via adds to a run behind the relay, beside what its adapter set:
-// - RELAY_TITLE, the agent's Agent description, which names a new session where the agent can retitle one.
-// - RELAY_TRACE, under VIA_TRACE=1 (for development): a trace of the run, the prompt, every line the relay printed
-//   and each inbox line, in ~/.claude/via/traces/<agent>-<time>.jsonl. pi, which runs without the relay, writes none.
 async function relayed(
   $: Pick<EngineInterface, 'clock' | 'env' | 'plugin'>,
   w: Pick<World, 'records'>,
@@ -246,7 +231,6 @@ export async function* run(
       const lines = buffer.split('\n')
       buffer = lines.pop() ?? ''
       for (const line of lines) yield* takeLine(line)
-      // Asked without waiting: Esc, the time limit and an interrupt still reach the harness meanwhile.
       while (s.asks.length > 0) void answerAsk($, w.inboxes, agentId, inbox, s.asks.shift() as Ask, adapter.name)
       if (s.issued !== undefined) {
         await save(s.issued)
@@ -277,7 +261,6 @@ export async function* run(
             ? `${adapter.name} exited with ${exit.code ?? exit.signal}.\n${why}`
             : `${adapter.name} ended with no answer.\n${why}`
       }
-      // Only a model the harness turned away, and not one it offers: a rate limit naming a good model is not that.
       const refused =
         choice.model &&
         !models.includes(choice.model) &&
@@ -293,16 +276,11 @@ export async function* run(
   } catch (err) {
     failure = `${adapter.name} could not run (is it installed and on PATH?): ${String(err)}`
   } finally {
-    // However the run ends, its harness ends with it: a limit, an Esc, or a step no hook reads on. Not
-    // awaited, so a child slow to go cannot hold up the rest.
     if (!exited) void Promise.resolve(pieces.return?.(undefined as never)).catch(() => {})
     timer?.cancel()
-    // Its subagents ran in the harness: nothing more can come from them.
     closeChildren(w, agentId, stopped === undefined ? undefined : 'the harness run was stopped')
     if (inbox) await closeInbox($, inbox, agentId, w.inboxes)
   }
-  // The harness ended its turn with a call still running, as agy 1.5.7 did with a command it sent to the
-  // background: its result is not in the answer, and the answer says so. Not a failed run's, whose failure says why.
   const left = [...s.open].filter(([id]) => !s.compacting.has(id)).map(([, title]) => `\`${title}\``)
   if (stopped === undefined && !failure && left.length > 0)
     s.notices.push(
@@ -319,8 +297,6 @@ export async function* run(
 
   if (stopped === 'abort') return { aborted: true, signed: '', usage: null, block: s.writer.index }
 
-  // The abort's own failure is not the answer: the interrupt's message runs next, after the steers it cut off.
-  // A run that finished before the abort, or hit the time limit, keeps its answer; the interrupt is undelivered.
   if (inbox?.interrupt !== undefined && failure && stopped === undefined) {
     yield s.writer.say('\n▸ interrupted\n')
     return {

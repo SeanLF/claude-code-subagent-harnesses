@@ -10596,28 +10596,29 @@ var attached = (text) => {
     const mimeType = IMAGE_TYPES[path.split(".").pop()?.toLowerCase() ?? ""];
     const real = realOrNone(path);
     if (!mimeType || !real || !IMAGE_ROOTS.some((root) => real.startsWith(`${root}/`))) continue;
-    let fd;
-    try {
-      fd = openSync(real, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
-      const stat = fstatSync(fd);
-      if (!stat.isFile() || stat.size > 5 * 1024 * 1024) continue;
-      const bytes = readFileSync(fd);
-      if (MAGIC[mimeType]?.(bytes)) blocks.push({ type: "image", mimeType, data: bytes.toString("base64") });
-    } catch {
-    } finally {
-      if (fd !== void 0) closeSync(fd);
-    }
+    const bytes = readThroughOneOpenNoLinkNoPipe(real, 5 * 1024 * 1024);
+    if (bytes && MAGIC[mimeType]?.(bytes)) blocks.push({ type: "image", mimeType, data: bytes.toString("base64") });
   }
   return blocks;
 };
+var OPEN_NO_LINK_NO_PIPE = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
+function readThroughOneOpenNoLinkNoPipe(path, maxBytes) {
+  let fd;
+  try {
+    fd = openSync(path, OPEN_NO_LINK_NO_PIPE);
+    const stat = fstatSync(fd);
+    return stat.isFile() && stat.size <= maxBytes ? readFileSync(fd) : void 0;
+  } catch {
+    return void 0;
+  } finally {
+    if (fd !== void 0) closeSync(fd);
+  }
+}
 var CAPABILITIES = {
   fs: { readTextFile: false, writeTextFile: false },
   terminal: false,
-  // notices: codex-acp then sends its warnings as notices, not as text in the answer.
   session: { compaction: {}, notices: {} },
   subagents: {},
-  // A harness's questions to the person (ACP elicitation, adapted from MCP's): printed as {"relay":"question"}
-  // lines, which via asks through Claude Code's own MCP elicitation form.
   elicitation: { form: {}, url: {} },
   _meta: { terminal_output_delta: true }
 };
@@ -10705,7 +10706,6 @@ function savedUpdate(update) {
     case "tool_call":
     case "tool_call_update":
       return update.content ? { ...update, content: update.content.map((c) => c.type === "content" ? { ...c, content: saved(c.content) } : c) } : update;
-    // A message between sessions (ACP's subagents RFD): whole, or a chunk of it.
     case "session_message":
       return update.content ? { ...update, content: update.content.map(saved) } : update;
     case "session_message_chunk":
@@ -10743,7 +10743,6 @@ var REPLY = discriminatedUnion("action", [
 var INBOX = union([
   string2(),
   object({ question: string2(), answer: REPLY }),
-  // An answer that names no option picks none.
   object({ answer: string2(), optionId: string2().nullable().default(null) }),
   object({ interrupt: string2() })
 ]);
@@ -10906,10 +10905,7 @@ var result = await client({ name: "via" }).onRequest(methods.client.session.requ
   const queue = [prompt];
   let interrupt;
   let last;
-  const promptDone = (r) => (
-    // Not in the stable type, but codex-acp and opencode send it.
-    out({ relay: "prompt_done", stopReason: r.stopReason, usage: r.usage ?? null })
-  );
+  const promptDone = (r) => out({ relay: "prompt_done", stopReason: r.stopReason, usage: r.usage ?? null });
   const steering = /* @__PURE__ */ new Set();
   const images = init.agentCapabilities?.promptCapabilities?.image === true;
   const prompted = (text) => ({

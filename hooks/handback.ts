@@ -32,7 +32,6 @@ export async function handbackAsked($: Pick<EngineInterface, 'session'>, agentId
   return Array.isArray(rows) && rows.some((m) => m.role === 'user' && m.text.includes(HANDBACK_TOOL))
 }
 
-// The answer as a SubagentHandback call, which auto mode asks a local agent to end with.
 export async function* deliver(
   name: string,
   e: { turnId: string; index: number },

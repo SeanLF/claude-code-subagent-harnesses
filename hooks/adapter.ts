@@ -8,53 +8,35 @@ import type { Mode, Norm } from './acp/norm'
 export type Adapter = {
   readonly name: string
   readonly bin: string
-  readonly about: string // the agent type's one-line description starts with it
-  // How the harness lists the models this person can use, in its own order. preferred: the harness's
-  // configured default, from a file under home, put first when its list does not lead with it.
+  readonly about: string
   readonly catalogue: {
     readonly argv: readonly string[]
     ids(stdout: string): string[]
     readonly preferred?: { readonly file: string; pick(text: string): string | undefined }
   }
   readonly readOnly: 'enforced' | 'none'
-  readonly tools?: readonly string[] // the only values a tools line may take; absent: a free tool list
-  // The levels a thinking line may take, or offered: the harness lists its own for each model, and refuses
-  // one it does not have (an ACP config option), so a list here would only drift from it.
+  readonly tools?: readonly string[]
   readonly thinking: readonly string[] | 'offered'
-  readonly options?: true // takes config lines: options of its ACP session, which the relay checks
+  readonly options?: true
   readonly steer: boolean
-  readonly defaultModel: boolean // takes the plugin's defaultModel setting
+  readonly defaultModel: boolean
   readonly models?: string
-  // A folder that voids read-only when found in the working folder or any folder above it, unless
-  // it holds only the `harmless` entries: the harness loads code from it before any permission applies.
-  // own: the person's own ~/<folder> is their config, not a project's, and does not count.
   readonly unsafeReadOnly?: { readonly folder: string; readonly harmless: readonly string[]; readonly why: string; readonly own?: boolean }
-  // What a read-only run runs first, and the environment its output requires: when the harness cannot
-  // prove it, turn.ts refuses the run. env returns undefined when the output does not prove it.
   readonly readOnlyGuard?: {
     readonly argv: readonly string[]
     env(stdout: string): Record<string, string> | undefined
     readonly why: string
   }
-  // Runs behind relay/relay.mjs, which needs Node 22.18 or later. install: an ACP adapter via installs
-  // once from a lockfile it ships, into ~/.claude/via/acp/<dir>; start then gets its entry point, or
-  // 'latest' when the person chose to fetch the newest one instead.
   readonly relay?: {
     readonly install?: { readonly dir: string; readonly package: string; readonly files: readonly string[]; readonly entry: string }
   }
-  // The agents tool's open: the command that opens a via agent's session in the harness's own UI, run from the
-  // folder the agent ran in. midRun: safe while via's run holds the session. service: a background service that
-  // must already be running, or opening would start one.
   readonly reopen?: {
     argv(session: string): readonly string[]
     readonly midRun: boolean
     readonly note?: string
     readonly service?: { readonly argv: readonly string[]; running(stdout: string): boolean; readonly why: string }
   }
-  // The session's id where via names it (pi's), rather than the harness issuing one.
   sessionOf?(agentId: string): string
-  // The agents tool's forget: a run of the relay's RELAY_DELETE for the session, which the relay refuses when the
-  // harness offers no delete. note: what the harness does with a deleted session. Absent: none to call.
   readonly forget?: {
     request(c: { root: string; session: string; installed?: string }): { argv: readonly string[]; env: Record<string, string> }
     readonly note?: string
@@ -66,15 +48,13 @@ export type Adapter = {
     agentId: string
     root: string
     inbox?: string
-    files?: string // where the relay saves what the agent sends as bytes (an image, audio)
+    files?: string
     guard?: Readonly<Record<string, string>>
     mode: Mode
     installed?: string
   }): ProcessSpawnRequest
-  // A parser per run: message boundaries can depend on earlier lines, and session is what the run asked to resume.
   events(session: string | undefined): (line: string) => Norm[]
-  model(choice: Choice): string | undefined // a real model name when the stream names none, never a pattern
-  // A known failure in plain words; sessionLost forgets the saved session so the next message starts fresh.
+  model(choice: Choice): string | undefined
   failure?(exit: ProcessSpawnResult, stderr: string): { message: string; sessionLost?: boolean } | undefined
 }
 

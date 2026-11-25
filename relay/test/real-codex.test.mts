@@ -1,8 +1,3 @@
-// The real codex-acp and the real `codex app-server` behind the real relay, with the model a local fake
-// (support/fake-model.mts): no tokens, no network. Codex reads its provider from CODEX_HOME/config.toml,
-// pointed at the fake, so the relay runs as via runs it, with no login and no change of its own. Skipped
-// when codex or codex-acp is not installed: CODEX_ACP names codex-acp's dist/index.js, or via's own
-// install of the pinned version is used.
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -54,9 +49,6 @@ afterEach(async () => {
   await fake.close()
 })
 
-// A Codex home per test, its provider the fake: the person's ~/.codex is never read, and no login is needed.
-// gpt-5.5 calls exec_command itself; newer models wrap tools in code mode (codex-acp's integration tests).
-// Plugins off: with them Codex reaches chatgpt.com and github.com at startup. features: more of Codex's own.
 const box = (features: string[] = []) => {
   const b = sandbox()
   const codexHome = join(b.root, 'codex-home')
@@ -84,7 +76,6 @@ type Box = ReturnType<typeof box>
 const codex = (b: Box, prompt: string, env: Record<string, string> = {}) =>
   runRelay({ agent: ['node', codexAcp], prompt, cwd: b.work, env: { ...b.env, ...env } })
 
-/** What request `n` carried, by role: Codex sends each message's content as a list of parts. */
 const said = (n: number, role: string) =>
   (fake.requests[n]?.input ?? []).filter((i) => i.type === 'message' && i.role === role).map((i) => JSON.stringify(i.content))
 
@@ -102,7 +93,6 @@ test('a scripted answer arrives as the answer, and the run ends done', { skip },
 test('a scripted shell command arrives as a tool call with its output, and Codex hands the output back', { skip }, async () => {
   const b = box()
   fake.enqueue(execCommandResponse('call_shell', { cmd: 'echo shell-ok' }), textResponse('ran it'))
-  // via's bypass mode: full access, every question approved.
   const run = await codex(b, 'Run echo shell-ok.', { RELAY_AGENT_MODE: 'agent-full-access', RELAY_POLICY: 'allow' })
   assert.equal(run.status, 0, run.stderr)
   const [call, ...rest] = toolCalls(run.events)
@@ -125,11 +115,9 @@ test('a follow-up resumes the session, and Codex sends the model the earlier tur
   assert.equal(first.status, 0, first.stderr)
   const sessionId = sessionOf(first.events)
   fake.enqueue(textResponse('You said PONG.'))
-  // A new relay and a new codex-acp, as via starts for each message.
   const second = await codex(b, 'What did you reply?', { RELAY_SESSION: sessionId })
   assert.equal(second.status, 0, second.stderr)
   assert.equal(sessionOf(second.events), sessionId)
-  // The resumed session replays its history before the new prompt's answer.
   assert.deepEqual(spoken(second.events), { replayed: 'PONG', answered: 'You said PONG.' })
   assert.match(said(1, 'user').join(), /Reply with only the word PONG\./)
   assert.match(said(1, 'assistant').join(), /PONG/)
@@ -157,7 +145,6 @@ test('an interrupt cancels the turn and runs its text next, in the same session'
   assert.match(JSON.stringify(fake.requests.at(-1)?.input), /Stop\. Reply with only the word REDIRECTED\./)
 })
 
-// Codex asks with request_user_input, outside Plan mode only with its feature on; codex-acp asks the client.
 test("Codex's own question reaches the relay as a form, and the person's choice reaches the model", { skip }, async () => {
   const b = box(['default_mode_request_user_input = true'])
   const question = {
@@ -175,7 +162,6 @@ test("Codex's own question reaches the relay as a form, and the person's choice 
   await run.until((line) => relayEvent([line], 'question') !== undefined)
   const asked = relayEvent(run.events, 'question')
   assert.equal(asked?.mode, 'form')
-  // Codex's choices, as titled options of the question's field.
   const choices = get(asked, 'requestedSchema', 'properties', 'target', 'oneOf')
   assert.ok(Array.isArray(choices))
   assert.deepEqual(
@@ -189,8 +175,6 @@ test("Codex's own question reaches the relay as a form, and the person's choice 
   assert.deepEqual(fake.unexpected, [])
 })
 
-// Codex's own multi-agent tools (`multi_agent`, on by default), called as the model calls them. The child
-// answers its task only once the parent has sent the follow-up, as a child still working when it arrives.
 const SPAWN = 'Reply with only the word KESTREL.'
 const FOLLOWUP = 'Now reply with only the word OSPREY.'
 
@@ -229,7 +213,6 @@ test("a subagent's task and a follow-up sent while it works reach the relay as m
   const root = sessionOf(run.events)
   const child = updates(run.events).find((u) => u.sessionUpdate === 'subagent_update')?.sessionId
   assert.equal(typeof child, 'string')
-  // Each message: the parent's outgoing view, then the child's incoming one, linked to it.
   const views = notifications(run.events).flatMap(({ sessionId, update: u }) =>
     u.sessionUpdate === 'session_message' && u.content
       ? [{ session: sessionId, id: u.messageId, to: u.recipientSessionId, from: u.senderMessageId, text: get(u, 'content', '0', 'text') }]
@@ -248,12 +231,9 @@ test("a subagent's task and a follow-up sent while it works reach the relay as m
   assert.equal(answer(run.events.filter((e) => !('sessionId' in e) || e.sessionId === root)), 'DONE')
 })
 
-/** Starts a run whose model asks for a long `sleep`, and resolves once the sleep runs, with its pid. */
 async function sleepingRun(b: Box, seconds: number, env: Record<string, string>) {
   const pidFile = join(b.work, 'sleep.pid')
-  // The interrupt is sent once the command runs, long before Codex's yield (10 s) would hand it back to the model.
   fake.enqueue(execCommandResponse('call_sleep', { cmd: sleeping(seconds, pidFile) }), textResponse('REDIRECTED'))
-  // via's bypass mode: the command runs without a question.
   const run = startRelay({
     agent: ['node', codexAcp],
     prompt: 'Sleep.',
@@ -266,15 +246,12 @@ async function sleepingRun(b: Box, seconds: number, env: Record<string, string>)
   return { run, pid }
 }
 
-// Codex keeps a cancelled turn's commands as background terminals (#58): an interrupt ends the turn, not
-// them. The relay closes the session at the run's end, which stops them; until then they run on.
 test('a shell command an interrupt leaves running ends with the run, leaving no process behind', { skip }, async () => {
   const b = box()
   const { run, pid } = await sleepingRun(b, 41.7, { RELAY_INBOX: b.inbox })
   send(b.inbox, { interrupt: 'Stop. Reply with only the word REDIRECTED.' })
   assert.equal(await run.exited, 0, run.stderr)
   assert.equal(alive(pid), false)
-  // The interrupt cut the turn mid-command, and its text was the next prompt.
   assert.deepEqual(
     relayEventsNamed(run.events, 'prompt_done').map((e) => e.stopReason),
     ['cancelled', 'end_turn'],
@@ -293,6 +270,5 @@ test('RELAY_DELETE has Codex archive the session, so resuming it afterwards is r
   assert.equal(deleted.status, 0, deleted.stderr)
   assert.deepEqual(relayEvent(deleted.events, 'forgotten'), { relay: 'forgotten', sessionId, how: 'deleted' })
   const again = await codex(b, 'What did you reply?', { RELAY_SESSION: sessionId })
-  // codex-acp's delete is Codex's archive: the session is kept, and `codex unarchive` brings it back.
   assert.ok(relayEvent(again.events, 'error')?.message.includes(`is archived. Run \`codex unarchive ${sessionId}\``), again.stderr)
 })

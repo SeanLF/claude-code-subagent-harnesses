@@ -1,5 +1,4 @@
 {
-  "//": "What every part checks the same way: the hooks (Claude Code's engine), pi-extension and the relay (Node).",
   "compilerOptions": {
     "target": "es2023",
     "strict": true,

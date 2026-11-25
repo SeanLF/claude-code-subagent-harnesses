@@ -6,8 +6,6 @@ import { answerCall, CHILD_CALL, type Job, type Mark, pump } from '../hooks/acp/
 import { type Children, childRun, closeChildren, route, woken } from '../hooks/children'
 import { agentInfo, agentStore, NODE, run, STEP } from './helpers'
 
-// Captured 2026-10-28 from relay/relay.mjs over codex-acp 2.3.1-preview.8 (codex-cli 0.165.0, gpt-6-luna),
-// asked to spawn one subagent: the standard subagent_update flow of ACP's subagents RFD, trimmed.
 const ROOT = '01a18155-81d4-7ba0-8246-5cba1d8adb3b'
 const CHILD = `${ROOT}:subagent:01a18155-8b4f-7403-bb8f-f472976c48cd`
 const MODEL = {
@@ -60,7 +58,6 @@ test("a subagent's session is parsed apart: its rows, model and message, never t
     { k: 'message' },
     { k: 'text', t: 'steps.ts' },
   ])
-  // The run's own: its wait row, its context, and only its own message as the answer.
   expect(norms.filter((n) => n.k === 'usage')).toEqual([{ k: 'usage', usage: { input: 21285, cacheRead: 0, cacheWrite: 0, output: 0 } }])
   expect(norms.filter((n) => n.k === 'text')).toEqual([{ k: 'text', t: 'It found steps.ts.' }])
 })
@@ -94,8 +91,6 @@ test('a refused or limit-stopped subagent says why, by the same mapping as the r
   expect(idle('end_turn')).toEqual([child])
 })
 
-// A parser past its first prompt, and the session_message updates of ACP's subagents RFD. A message is said once
-// its own session moves on: until then it may still grow, or its other view arrive.
 function messages() {
   const parse = relayEvents()
   parse(JSON.stringify(CAPTURED[0]))
@@ -106,7 +101,6 @@ function messages() {
     message: (sessionId: string, update: Record<string, unknown>) => send('session_message', sessionId, update),
     chunk: (sessionId: string, messageId: string, t: string) =>
       send('session_message_chunk', sessionId, { messageId, content: { type: 'text', text: t } }),
-    // Any other update, on the run's own session unless named; only what it says of messages. parse: any line.
     moved: Object.assign(
       (sessionId = ROOT) =>
         send('usage_update', sessionId, { used: 1, size: 10 }).filter((n) => n.k === 'told' || (n.k === 'of' && n.norm.k === 'told')),
@@ -131,7 +125,6 @@ test('a message to a subagent is said once the run moves on; with both its views
       content: text('As received'),
     }),
   ).toEqual([])
-  // The parent's session moving on says nothing yet: the child's view waits.
   expect(moved()).toEqual([])
   expect(moved(CHILD)).toEqual([toldChild('As received')])
   expect([...moved(), ...moved(CHILD)]).toEqual([])
@@ -139,13 +132,11 @@ test('a message to a subagent is said once the run moves on; with both its views
 
 test("a message's other view is never said again, however the two are linked and whichever came first", () => {
   const { message, moved } = messages()
-  // Outgoing first and said; the incoming view unlinked, then a link-only update on the outgoing one.
   message(ROOT, { messageId: 'out1', senderSessionId: ROOT, recipientSessionId: CHILD, content: text('Search acp.') })
   expect(moved()).toEqual([toldChild('Search acp.')])
   message(CHILD, { messageId: 'in1', recipientSessionId: CHILD, content: text('Search acp.') })
   message(ROOT, { messageId: 'out1', recipientMessageId: 'in1' })
   expect([...moved(), ...moved(CHILD)]).toEqual([])
-  // Incoming first and said, naming the outgoing view, which then comes unlinked.
   message(CHILD, { messageId: 'in2', senderSessionId: ROOT, senderMessageId: 'out2', recipientSessionId: CHILD, content: text('Go on.') })
   expect(moved(CHILD)).toEqual([toldChild('Go on.')])
   message(ROOT, { messageId: 'out2', senderSessionId: ROOT, recipientSessionId: CHILD, content: text('Go on.') })
@@ -154,15 +145,12 @@ test("a message's other view is never said again, however the two are linked and
 
 test("a message's later upserts and chunks are kept, as the RFD's patch rules say", () => {
   const { message, chunk, moved } = messages()
-  // Empty, then its content.
   message(ROOT, { messageId: 'out1', senderSessionId: ROOT, recipientSessionId: CHILD, content: [] })
   message(ROOT, { messageId: 'out1', content: text('Reply with the word KESTREL.') })
   expect(moved()).toEqual([toldChild('Reply with the word KESTREL.')])
-  // Its recipient named on a first, contentless upsert, and left out of the one with content.
   message(ROOT, { messageId: 'out2', senderSessionId: ROOT, recipientSessionId: CHILD })
   message(ROOT, { messageId: 'out2', content: text('Then OSPREY.') })
   expect(moved()).toEqual([toldChild('Then OSPREY.')])
-  // Streamed into the child's view, its participants after the chunks.
   chunk(CHILD, 'in3', 'Start by ')
   chunk(CHILD, 'in3', 'reproducing it.')
   message(CHILD, { messageId: 'in3', senderSessionId: ROOT, recipientSessionId: CHILD })
@@ -192,7 +180,6 @@ test("a permission request or a steer between a message's chunks cuts nothing; o
   chunk(CHILD, 'in1', 'Start by ')
   const ask = { relay: 'ask', id: 'p1', title: 'Run ls', kind: 'execute', options: [] }
   expect(parse(ask)).toEqual([])
-  // A steer codex-acp takes mid-turn is no prompt's end either.
   expect(parse({ relay: 'steered' })).toEqual([])
   chunk(CHILD, 'in1', 'reproducing it.')
   expect(parse({ relay: 'prompt_done', stopReason: 'end_turn' })).toEqual([toldChild('Start by reproducing it.')])
@@ -238,7 +225,7 @@ test("a child's progress and step rows stream before its final message", async (
   send({ k: 'thinking', t: 'Checking the call sites.' })
   const plan: Norm = { k: 'plan', entries: [{ content: 'Read the code', status: 'in_progress' }] }
   send(plan)
-  send(plan) // Repeated plan snapshots do not add rows.
+  send(plan)
   send({ k: 'message' })
   send({ k: 'text', t: 'Reading the implementation.' })
   send({ k: 'call', id: 'read', kind: 'read', title: 'Read hooks/children.ts' })
@@ -272,7 +259,6 @@ test("a child's progress and step rows stream before its final message", async (
   expect(second.result.toolUses[0]?.input).toEqual({ kind: 'read', title: 'Read hooks/children.ts' })
   const readCall = second.out.find((c) => c.kind === 'tool')
   expect(await answerCall(steps, readCall?.kind === 'tool' ? readCall.id : undefined, signal, wait)).toEqual({ result: 'source' })
-  // Still live throughout both steps. Only the next message and idle event finish the child.
   expect(w.channels.get('a1/c#1')?.ended).toBe(false)
   send({ k: 'message' })
   send({ k: 'text', t: 'The implementation is correct.' })
@@ -312,7 +298,6 @@ async function drain(gen: AsyncGenerator<TurnStepChunk | Mark, TurnStepResult>) 
 
 test("a subagent's first work spawns its nested agent once, and its nested agent shows its rows then its signed answer", async () => {
   const w = world()
-  // Its announcement and model are not work: it waits for a task to show as its prompt.
   expect(route(w, 'a1', 'via:codex', { k: 'child', id: 'c', parent: 'root', title: 'List acp' })).toEqual([])
   expect(route(w, 'a1', 'via:codex', of('c', { k: 'model', name: 'gpt-6-luna' }))).toEqual([])
   expect(route(w, 'a1', 'via:codex', of('c', { k: 'call', id: 'x', kind: 'read', title: 'List files' }))).toEqual([
@@ -330,15 +315,12 @@ test("a subagent's first work spawns its nested agent once, and its nested agent
     { kind: 'call-end', id: 'x', output: 'steps.ts', failed: false },
   ])
   expect(result.answer).toBe('steps.ts\n\n— answered by codex subagent, gpt-6-luna')
-  // Seen live 2026-10-28: codex-acp clears the child's cancel capability after it goes idle. A patch
-  // is not a new child; only the parent's end lets the child go.
   expect(route(w, 'a1', 'via:codex', { k: 'child', id: 'c', parent: 'root' })).toEqual([])
   expect(route(w, 'a1', 'via:codex', of('c', { k: 'model', name: 'gpt-6-luna' }))).toEqual([])
   closeChildren(w, 'a1')
   expect(w.channels.size).toBe(0)
 })
 
-// A child that wrote part of a reply, then ended as the parse of its idle state says.
 async function endedWith(end: { failure?: string; cancelled?: boolean }) {
   const w = world()
   route(w, 'a1', 'via:codex', { k: 'child', id: 'c', parent: 'root', title: 'List acp' })
@@ -365,7 +347,6 @@ test('work after a subagent went idle is a new nested agent with the same title'
   route(w, 'a1', 'via:codex', { k: 'child', id: 'c', parent: 'root', title: 'List acp' })
   route(w, 'a1', 'via:codex', { k: 'child', id: 'c', parent: 'root', state: 'idle' })
   expect(route(w, 'a1', 'via:codex', { k: 'child', id: 'c', parent: 'root', state: 'running' })).toEqual([])
-  // Found by review: each assignment keeps its own queue, so two nested agents never split one.
   expect(route(w, 'a1', 'via:codex', of('c', { k: 'text', t: 'second' }))).toEqual([
     { kind: 'spawn', child: 'a1/c#2', type: 'via:codex', title: 'List acp' },
   ])
@@ -378,7 +359,6 @@ test("a subagent with no announcement (codex-acp 2.3.0's own form) still gets a 
   expect(route(w, 'a1', 'via:codex', of('c', { k: 'text', t: 'done' }))).toEqual([
     { kind: 'spawn', child: 'a1/c#1', type: 'via:codex', title: 'subagent' },
   ])
-  // The parent's run ends before the nested agent's first step: its queue waits for it.
   closeChildren(w, 'a1')
   w.nested.set('n1', 'a1/c#1')
   const { result } = await drain(
@@ -421,7 +401,6 @@ test("a subagent's own subagent given new work after its parent's nested agent e
   route(w, 'a1', 'via:codex', of('g', { k: 'told', t: 'Search acp.' }))
   route(w, 'a1', 'via:codex', { k: 'child', id: 'g', parent: 'c', state: 'idle' })
   route(w, 'a1', 'via:codex', { k: 'child', id: 'c', parent: 'root', state: 'idle' })
-  // Its nested agent has read its end: nothing reads its queue any more.
   const outer = w.channels.get('a1/c#1')
   if (outer) outer.read = true
   expect(route(w, 'a1', 'via:codex', of('g', { k: 'told', t: 'Search again.' }))).toEqual([
@@ -460,14 +439,11 @@ test('a spawn mark ends the step with an Agent call in the background, remembere
 
 test("a nested agent's end or message to its via parent is a wake, and a prompt beside one still runs", () => {
   const nested = new Map([['n1', { key: 'a1/c#1' }]])
-  // Captured 2026-10-28, trimmed: the notification of a nested agent's end, framed as Claude Code frames it.
   const ended = `[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\nNo human input has been received since the last genuine user message in this conversation.\n\n<task-notification>\n<tool-use-id>${CHILD_CALL}t1_1</tool-use-id>\n<status>completed</status>\n</task-notification>`
   expect(woken(ended, nested)).toBe('')
-  // Sent as the nested agent after its handback, it woke the parent for a second run.
   const note =
     'Another Claude session sent a message while you were working:\n<agent-message from="n1">\n  Note: The server-side auto mode classifier was unavailable.\n</agent-message>\n\nThat "other Claude session" is an agent working inside this same session.'
   expect(woken(note, nested)).toBe('')
-  // Found by review: a real prompt batched with a wake is the turn's prompt, not swallowed.
   expect(woken(`${ended}\n\nReview the error handling in src/api.`, nested)).toBe('Review the error handling in src/api.')
   expect(woken('<agent-message from="someone-else">hi</agent-message>', nested)).toBeUndefined()
   expect(woken('<agent-message from="n1" summary="done">ok</agent-message>', nested)).toBe('')
@@ -587,7 +563,6 @@ test('a child answers during a parent tool, whose continuation still delivers it
   expect(before).toBe(true)
   expect(answer).toBe('steps.ts\n\n— answered by codex subagent, gpt-6-luna')
   expect(continued).toEqual({ result: 'parent output' })
-  // An earlier parallel call was held before the spawn: it did not delay the child or lose output.
   const parallel = await run($, { ...step, index: 3 })
   const parallelTool = parallel.chunks.find((chunk) => chunk.kind === 'tool')
   expect(

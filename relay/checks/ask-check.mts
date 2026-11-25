@@ -1,6 +1,3 @@
-// Live check: plays via's side of the relay's permission questions, answering each with a fixed choice.
-// It spends tokens, so nothing runs it but a person.
-// Usage: node relay/checks/ask-check.mts <workdir> <agent mode> <allow|deny> <prompt> -- <agent command...>
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { answer, type Printed, relayEvent, send, startRelay, toolCalls } from '../test/support/relay-run.mts'
@@ -28,7 +25,6 @@ const run = startRelay({
   backstopMs: 300_000,
 })
 
-// Each question as it comes, answered through the inbox as the plugin answers it; until the relay ends.
 const answered = new Set<string>()
 const asked = (line: Printed) => {
   const ask = relayEvent([line], 'ask')
@@ -52,7 +48,6 @@ for (const e of run.events) {
   const r = relayEvent([e], 'model') ?? relayEvent([e], 'error')
   if (r) console.log(`${r.relay}: ${r.relay === 'model' ? r.name : r.message}`)
 }
-// An update may leave the title out: the call's last title is its name.
 const titles = new Map<string, string>()
 for (const u of toolCalls(run.events)) {
   if (u.title) titles.set(u.toolCallId, u.title)

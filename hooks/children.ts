@@ -4,34 +4,28 @@ import { CHILD_CALL, type Mark } from './acp/steps'
 import { deliver, respond } from './handback'
 import { answeredBy, StepWriter } from './writer'
 
-// A harness's own subagents (ACP's subagents RFD) as Claude Code agents nested under the via agent: the
-// via agent's step calls the Agent tool, and via drives the nested agent's steps from what the child's
-// session says. Its events reach via only through the parent's run, which a parent step is always
-// reading while the harness runs, so the nested agent waits on a queue the parent's run fills.
-
 type Queued =
   | Norm
   | { readonly k: 'end'; readonly failure?: string; readonly cancelled?: boolean }
   | { readonly k: 'spawn'; readonly child: string }
 export type Channel = {
-  readonly key: string // this assignment's: a child's work after an end is a new nested agent
-  readonly type: string // the nested agent's subagent_type
+  readonly key: string
+  readonly type: string
   title: string
-  role?: string // the harness's own word for what the child is (ACP's description), not its task
-  prompt?: string // the task its assignment started with, when the harness said it
+  role?: string
+  prompt?: string
   model?: string
   readonly queue: Queued[]
   wake?: () => void
-  spawned: boolean // shown: its Agent call is made, or queued for its parent's nested agent
+  spawned: boolean
   ended: boolean
-  read: boolean // its nested agent has shown it all
-  closed: boolean // the via agent's run ended
+  read: boolean
+  closed: boolean
 }
 export type Children = {
-  // By `${via agent id}/${child session id}`, the child's current assignment, and by each assignment's key.
   channels: Map<string, Channel>
-  nested: Map<string, string> // by the nested agent's id: its channel's key
-  parents: Map<string, string> // by `${via agent id}/${child session id}`: the session that owns the child
+  nested: Map<string, string>
+  parents: Map<string, string>
 }
 
 const put = (channel: Channel, item: Queued) => {
@@ -39,17 +33,12 @@ const put = (channel: Channel, item: Queued) => {
   channel.wake?.()
 }
 
-// A child's event, from the via agent's run: a spawn mark for the first one of a child of the harness's
-// own session; a nested child's spawn goes to its parent's queue, whose agent makes it.
 export function route(w: Children, agentId: string, type: string, event: Extract<Norm, { k: 'child' | 'of' }>): Mark[] {
   const key = (session: string) => `${agentId}/${session}`
   const id = event.k === 'child' ? event.id : event.child
   if (event.k === 'child') w.parents.set(key(id), event.parent)
   let channel = w.channels.get(key(id))
   const marks: Mark[] = []
-  // A child is known on its announcement or its first event, never on a patch alone (codex-acp clears its
-  // cancel capability after it goes idle). Work after an end is a new assignment of the same child: a new
-  // nested agent, as Claude Code shows one; its model snapshot is not work.
   const working = (event.k === 'of' && event.norm.k !== 'model') || (event.k === 'child' && event.state === 'running')
   const announced = event.k === 'child' && event.title !== undefined
   if (channel === undefined ? working || announced || event.k === 'of' : channel.ended && working) {
@@ -74,14 +63,11 @@ export function route(w: Children, agentId: string, type: string, event: Extract
     if (event.title !== undefined) channel.title = event.title
     if (event.description !== undefined) channel.role = event.description
   }
-  // Shown as a nested agent once it has its task, or once it works or ends without one: its task is the Agent
-  // call's prompt, as Claude Code shows any agent's; a later one is a message in its view.
   const told = event.k === 'of' && event.norm.k === 'told' ? event.norm.t : undefined
   if (!channel.spawned) {
     if (told !== undefined) channel.prompt = told
     if (told !== undefined || (event.k === 'of' && event.norm.k !== 'model') || (event.k === 'child' && event.state === 'idle')) {
       channel.spawned = true
-      // Its parent's nested agent makes it while that agent still reads; after, the run does.
       const owner = w.parents.get(key(id))
       const parent = owner === undefined ? undefined : w.channels.get(key(owner))
       if (parent?.spawned && !parent.ended && !parent.read) put(parent, { k: 'spawn', child: channel.key })
@@ -99,7 +85,6 @@ export function route(w: Children, agentId: string, type: string, event: Extract
   return marks
 }
 
-// The Agent call that shows a child's assignment as a nested agent. codex-acp's role `default` says nothing.
 function spawnMark(channel: Channel): Extract<Mark, { kind: 'spawn' }> {
   const { key, type, title, role, prompt } = channel
   return {
@@ -111,7 +96,6 @@ function spawnMark(channel: Channel): Extract<Mark, { kind: 'spawn' }> {
   }
 }
 
-// Claude Code's own framing around a notification or an agent's message, line by line.
 const FRAMING = [
   '[SYSTEM NOTIFICATION',
   'This is an automated background-task event',
@@ -121,9 +105,6 @@ const FRAMING = [
   'That "other Claude session" is an agent',
 ]
 
-// A nested agent's end, or a message sent as it (auto mode's note on its work), can reach its via parent
-// as a turn after the parent's run. Without them and Claude Code's framing, what is left is the turn's
-// prompt: '' for a wake, which runs nothing; undefined when the turn has none of them.
 export function woken(text: string, nested: ReadonlyMap<string, unknown>): string | undefined {
   let found = false
   const rest = text
@@ -145,14 +126,11 @@ export function woken(text: string, nested: ReadonlyMap<string, unknown>): strin
     .trim()
 }
 
-// The via agent's run ended: its harness's subagents can say nothing more. Their queues stay for their
-// nested agents, whose first step can come after the parent's last; each drops its own once read.
 export function closeChildren(w: Children, agentId: string, failure?: string): void {
   for (const key of w.parents.keys()) if (key.startsWith(`${agentId}/`)) w.parents.delete(key)
   for (const [key, channel] of w.channels) {
     if (!key.startsWith(`${agentId}/`)) continue
     channel.closed = true
-    // Read, or never shown (announced, then no task, work or end): no nested agent will read it.
     if (channel.read || !channel.spawned) w.channels.delete(key)
     else if (!channel.ended) {
       channel.ended = true
@@ -161,18 +139,12 @@ export function closeChildren(w: Children, agentId: string, failure?: string): v
   }
 }
 
-// A nested agent's run: its child's rows and messages, then its last message as the answer, signed with
-// the model the child's session reported.
-// The engine's bounded wait for a nested agent's channel to get its next event (see waitChild). Resolves when
-// an event arrives, after the bound, or at once when the channel already has one. A noun, so the wait is not
-// charged to the hook's own budget.
 export async function waitChild(
   w: Children,
   key: string,
   after: (wake: () => void) => ReturnType<EngineInterface['clock']['after']>,
 ): Promise<void> {
   const channel = w.channels.get(key)
-  // Gone: throw, so the caller ends its answer. Returning would make the caller wait again at once, forever.
   if (!channel) throw new Error('its event channel is no longer available')
   if (channel.queue.length > 0) return
   let timer: ReturnType<EngineInterface['clock']['after']> | undefined
@@ -206,8 +178,6 @@ export async function* childRun(
     const item = channel?.queue.shift() ?? (channel === undefined ? ({ k: 'end' } as const) : undefined)
     if (item === undefined) {
       if (signal.aborted) break
-      // Bounded: each wait returns within the engine's reply deadline. A failed wait ends this child's answer
-      // with a failure, not an error: an error would fall through to the model without the hooks.
       const wake = () => channel?.wake?.()
       signal.addEventListener('abort', wake, { once: true })
       try {
@@ -223,7 +193,6 @@ export async function* childRun(
     if (item.k === 'end') {
       failure = item.failure ?? failure
       cancelled = item.cancelled === true
-      // Kept while the run goes on, so its late patches are known as this child's, not a new one.
       if (channel) channel.read = true
       if (channel?.closed) for (const [key, held] of w.channels) if (held === channel) w.channels.delete(key)
       break
@@ -242,8 +211,6 @@ export async function* childRun(
     else if (item.k === 'called') yield { kind: 'call-end', id: item.id, output: item.output, failed: item.failed }
     else if (item.k === 'notice') notices.push(item.t)
   }
-  // A failed or cancelled child keeps what it said, then why in place of the signature: a signature says it
-  // answered. A cancel is most often its parent's own interrupt, so it reads as cancelled, not failed.
   const tail = failure
     ? `The ${name} subagent failed: ${failure}`
     : cancelled
@@ -251,7 +218,6 @@ export async function* childRun(
       : answeredBy(`${name} subagent`, channel?.model)
   const report = writer.report.trim()
   const said = report || (failure || cancelled ? '' : `The ${name} subagent ended without a message.`)
-  // A child's warnings, as its parent's: after what it said, before the signature or why it failed.
   const noted = notices.join('\n')
   const signed = [said, noted, tail].filter(Boolean).join('\n\n')
   yield writer.say(`${report && writer.spoke ? '\n\n' : said ? `${said}\n\n` : ''}${noted ? `${noted}\n\n` : ''}${tail}`)

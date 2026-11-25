@@ -41,7 +41,6 @@ test('a later step joins one retained producer read through bounded waits, advan
   }
   const timers: { wake: () => void; cancelled: boolean }[] = []
   let waits = 0
-  // Production registers this as an engine noun: each bounded wait is one timer, and returns when it fires.
   const wait = () => {
     waits += 1
     return steps.waitStep(world, 'fixture', 't1', (wake) => {
@@ -155,7 +154,6 @@ test('a replaced run is never read by the step that held the old one', async () 
   steps.endJob(world, 'fixture')
   world.jobs.set('fixture', newer)
   expect((await old).stopReason).toBe('end_turn')
-  // The new turn's wait for its own turn reads only its own run.
   expect(world.jobs.get('fixture')).toBe(newer)
   expect(newerReads).toBe(0)
 })
@@ -221,7 +219,6 @@ test('a read that threw ends its step with an explicit answer, and is not kept',
   }
   const event = { turnId: 't1', index: 0, agentId: 'fixture' }
   const never = () => new Promise<void>(() => {})
-  // A failed producer ends the step with an explicit answer, not a hook error.
   const first = await finish(steps.pump(world, job, event, new AbortController().signal, never))
   expect(first.stopReason).toBe('end_turn')
   expect(first.answer).toContain('could not be followed')
@@ -229,8 +226,6 @@ test('a read that threw ends its step with an explicit answer, and is not kept',
   expect(second.stopReason).toBe('end_turn')
 })
 
-// A harness command that runs past the hook's ten-second budget (a lint then a typecheck in one call) must be
-// followed through the engine's bounded wait, not one unbounded read inside the tool.call hook.
 test('a tool call waits on a silent harness through the bounded wait, and a failed wait answers it', async () => {
   const job: steps.Job = {
     turnId: 't1',

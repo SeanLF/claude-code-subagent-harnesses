@@ -141,7 +141,6 @@ test("a description names the harness's first model from its last listing, and t
   const { described, stored, cwds } = codexOnPath(on, store, { exitCode: 0, stdout: SOL })
   await $.session.start({ cwd: '/', surface: null, isInteractive: false })
   await stored
-  // From home: in the project, opencode would load the project's plugins.
   expect(cwds).toEqual(['/home/u'])
   expect(described[0]).toContain('`model: gpt-6-luna`')
   expect(store.get('models.codex')).toEqual(['gpt-6.1-sol'])

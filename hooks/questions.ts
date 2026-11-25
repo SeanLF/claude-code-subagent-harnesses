@@ -1,10 +1,6 @@
 import { isRecord } from './acp/json'
 import type { Question } from './acp/norm'
 
-// A harness's question (ACP elicitation, MCP's form) as Claude Code's AskUserQuestion dialog asks it, and the
-// answers read back onto the harness's requestedSchema. A form the dialog can't show (a link to open, more than
-// four fields, a choice of more than three, a field of another kind) goes to the step server's MCP form instead.
-
 export const LET_CLAUDE = 'Let Claude answer'
 export const DECLINE = 'Decline'
 const MAX_QUESTIONS = 4
@@ -12,8 +8,6 @@ const MAX_OPTIONS = 4
 const HEADER = 12
 
 type Choice = { value: unknown; label: string }
-// One field, asked as one question of the dialog. title: the question as shown, unique in the form; sink: the
-// text field that takes this question's free text, when it is a choice with one.
 export type Asked = {
   name: string
   kind: 'choice' | 'multi' | 'text' | 'number'
@@ -26,9 +20,7 @@ export type Asked = {
   max?: number
   sink?: string
 }
-// offer: the dialog offers "Let Claude answer".
 export type Plan = { asked: Asked[]; offer: boolean }
-// A question as AskUserQuestion takes it.
 export type Shown = { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }
 
 function choicesOf(field: Record<string, unknown>): Choice[] | undefined {
@@ -59,19 +51,14 @@ const kindOf = (field: Record<string, unknown>): Pick<Asked, 'kind' | 'choices'>
   return undefined
 }
 
-// What a number field takes, in words: "a whole number from 1 to 8".
 const rangeOf = (a: Pick<Asked, 'integer' | 'min' | 'max'>) =>
   `${a.integer ? 'a whole number' : 'a number'}${a.min !== undefined ? ` from ${a.min}` : ''}${a.max !== undefined ? ` to ${a.max}` : ''}`
 
-// The options a question shows: its choices, "Let Claude answer" when offered, and "Decline" while it has fewer than two.
 export function optionsOf(a: Asked, offer: boolean): string[] {
   const labels = [...a.choices.map((c) => c.label), ...(offer ? [LET_CLAUDE] : [])]
   return labels.length < 2 ? [...labels, DECLINE] : labels
 }
 
-// The form as the dialog's questions, or undefined when it doesn't fit the dialog. A text field named after a
-// choice (codex-acp's question_0_note for question_0) is that choice's sink, not a question of its own: the
-// free text typed under the dialog's "Other" goes there.
 export function planOf(q: Question, harness: string, offer: boolean): Plan | undefined {
   if (q.mode !== 'form') return undefined
   const schema = q.requestedSchema
@@ -105,11 +92,9 @@ export function planOf(q: Question, harness: string, offer: boolean): Plan | und
   const plan: Asked[] = asked.map(({ field, ...f }, i) => {
     const title = typeof field.title === 'string' && field.title ? field.title : ''
     const description = typeof field.description === 'string' ? field.description : ''
-    // A field with neither title nor description is asked by the form's message, as the MCP form shows it.
     const named = title || description || (i === 0 && q.message ? q.message : f.name)
     let text = [named, title && description && description !== title ? description : ''].filter(Boolean).join('\n')
     if (f.kind === 'number' && (f.min !== undefined || f.max !== undefined)) text += ` (${rangeOf(f)})`
-    // The form's own message leads the first question, unless it only repeats it.
     if (i === 0 && q.message && q.message !== named) text = `${q.message}\n\n${text}`
     while (titles.has(text)) text = `${text} (${i + 1})`
     titles.add(text)
@@ -118,7 +103,6 @@ export function planOf(q: Question, harness: string, offer: boolean): Plan | und
   })
   for (const a of plan) {
     const labels = optionsOf(a, offer)
-    // The dialog takes two to four options: a text or number field with no hand-off to offer has only Decline.
     if (labels.length < 2 || labels.length > MAX_OPTIONS || new Set(labels).size !== labels.length || labels.some((l) => !l.trim()))
       return undefined
     if (a.choices.some((c) => c.label === LET_CLAUDE || c.label === DECLINE)) return undefined
@@ -129,7 +113,6 @@ export function planOf(q: Question, harness: string, offer: boolean): Plan | und
 const LET_CLAUDE_SAYS = 'Hand this question to the main agent, which answers it for you'
 const DECLINE_SAYS = 'Answer none of these questions'
 
-// The dialog's questions; note leads the first one, saying why it is asked again.
 export function shownOf(plan: Plan, note = ''): Shown[] {
   return plan.asked.map((a, i) => ({
     question: i === 0 && note ? `${note}\n\n${a.title}` : a.title,
@@ -142,8 +125,6 @@ export function shownOf(plan: Plan, note = ''): Shown[] {
   }))
 }
 
-// One answer's text as the field's value. A choice is named by its label, exactly or at the answer's start (what
-// follows goes to its sink); other text goes to its sink, when it has one.
 type Value = { value?: unknown; text?: string } | { error: string }
 function fieldValue(a: Asked, said: string): Value {
   const text = said.trim()
@@ -176,7 +157,6 @@ function fieldValue(a: Asked, said: string): Value {
   }
   const exact = a.choices.find((c) => label(c.label) === label(text))
   if (exact) return { value: exact.value }
-  // The longest label first, so "Yes, always" is not read as "Yes".
   const leading = [...a.choices]
     .sort((x, y) => y.label.length - x.label.length)
     .find((c) => label(text).startsWith(label(c.label)) && !/\w/.test(text[c.label.length] ?? ''))
@@ -187,8 +167,6 @@ function fieldValue(a: Asked, said: string): Value {
   return sinkOr(text, `"${a.title}" takes ${named}.`)
 }
 
-// What the answers say: the harness's content, the questions handed to the main agent, a decline, or why they
-// can't go back as they are.
 export type Read = { content: Record<string, unknown>; handed: Asked[]; declined?: true; errors: string[] }
 
 function put(content: Record<string, unknown>, a: Asked, v: { value?: unknown; text?: string }) {
@@ -196,7 +174,6 @@ function put(content: Record<string, unknown>, a: Asked, v: { value?: unknown; t
   if (v.text !== undefined && a.sink !== undefined) content[a.sink] = v.text
 }
 
-// The person's answers, as AskUserQuestion returns them: by question text, a multi-select's comma-joined.
 export function readAnswers(plan: Plan, answers: Readonly<Record<string, unknown>>, shown: Shown[]): Read {
   const read: Read = { content: {}, handed: [], errors: [] }
   plan.asked.forEach((a, i) => {
@@ -216,8 +193,6 @@ export function readAnswers(plan: Plan, answers: Readonly<Record<string, unknown
   return read
 }
 
-// The main agent's message, onto the questions handed to it: the whole message for one question, a numbered line
-// each ("1. Blue") for several. "Decline" declines them all.
 export function readReply(handed: Asked[], message: string): Read {
   const read: Read = { content: {}, handed: [], errors: [] }
   if (message.trim().toLowerCase() === DECLINE.toLowerCase()) return { ...read, declined: true }
@@ -246,8 +221,6 @@ export function readReply(handed: Asked[], message: string): Read {
   return read
 }
 
-// The message the main agent gets: which agent asks, why it's the main agent's to answer, the questions with
-// their options, and how to answer. Its first line stands alone, as SendMessage's recipient previews it.
 export function handoffText(o: { harness: string; to: string; why: string; handed: Asked[] }): string {
   const one = o.handed.length === 1
   const lines = [
@@ -270,12 +243,6 @@ export function handoffText(o: { harness: string; to: string; why: string; hande
   return lines.join('\n')
 }
 
-// Claude Code's form cuts a field's title at about 47 characters, and codex-acp puts each of Codex's questions in
-// its field's title. A title longer than LONG_TITLE goes first in the form's message instead, its field labelled.
-// The message shows MESSAGE_LINES lines, each cropped at the terminal's width (anthropics/claude-code#102766), so
-// questions are wrapped to fit 80 columns: the first long one always moves, one of up to about 220 characters shown
-// whole; a later one moves only while all still fit, or it would be hidden, and otherwise keeps its own cut title.
-// Only for the form: AskUserQuestion shows a question whole.
 const LONG_TITLE = 40
 const WRAP = 72
 const MESSAGE_LINES = 3

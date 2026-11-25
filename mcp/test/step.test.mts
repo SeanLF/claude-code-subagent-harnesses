@@ -6,7 +6,6 @@ import { test } from 'node:test'
 
 const server = new URL('../step.mts', import.meta.url).pathname
 
-/** A JSON-RPC answer from the server, by the fields the tests read. */
 type Answer = {
   readonly id?: number
   readonly result?: { readonly protocolVersion?: string; readonly tools?: readonly { readonly name: string }[]; readonly isError?: boolean }
@@ -60,14 +59,12 @@ test("the hooks answer the tool Claude Code names after plugin.json's server", (
   assert.match(hooks, new RegExp(`const STEP = 'mcp__plugin_${plugin.name}_${server}__step'`))
 })
 
-/** The server as a client talks to it, both ways: each line it prints, waited for in turn, never by time. */
 const session = (elicitation?: Record<string, object>) => {
   const child = spawn('node', [server], { stdio: ['pipe', 'pipe', 'inherit'], timeout: 20_000 })
   const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]()
   const write = (message: Record<string, unknown>) => child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
   const read = async () => {
     const line = await lines.next()
-    // Ends with the server: a wait for a line that never comes fails, rather than hangs.
     assert.equal(line.done, false, 'the server ended')
     return JSON.parse(line.value) as { id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown }
   }
@@ -83,7 +80,6 @@ const FORM = {
 const LINK = { mode: 'url', message: 'Sign in to continue.', url: 'https://example.com/login', elicitationId: 'e1' }
 const replyIn = (result: unknown) => JSON.parse((result as { content: { text: string }[] }).content[0]?.text ?? '') as unknown
 
-/** A question call against a client that offers `elicitation`: the request the client got (if any) and the call's result. */
 const asked = async (
   elicitation: Record<string, object> | undefined,
   question: object,
@@ -108,7 +104,6 @@ test("a question call is asked as MCP's form elicitation, and the person's reply
   const { request, result } = await asked({ form: {}, url: {} }, FORM, () => ({
     result: { action: 'accept', content: { target: 'staging' } },
   }))
-  // Form is MCP's default mode: the request names none, as a client that knows only forms expects.
   assert.deepEqual(
     { method: request?.method, params: request?.params },
     {

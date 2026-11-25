@@ -1,12 +1,12 @@
 # Contributing
 
-`mise install && pnpm install`, then `pnpm lint` (Biome), `pnpm test` and `pnpm validate`. CI runs all three; the last two need the `claude` CLI. `pnpm typecheck` needs the typings a logged-in Claude Code session writes to `.claude-plugin/types/`.
+`mise install && pnpm install`, then `pnpm lint` (Biome, and `checks/comments.mts`), `pnpm test` and `pnpm validate`. CI runs all three; the last two need the `claude` CLI. `pnpm typecheck` needs the typings a logged-in Claude Code session writes to `.claude-plugin/types/`.
 
 - Codex, OpenCode and agy run over [ACP](https://agentclientprotocol.com) (Agent Client Protocol, a standard way to drive coding agents) through `relay/relay.mjs`, a committed bundle. Run `pnpm build:relay` after changing `relay/src/` or the SDK version; CI fails when the bundle doesn't match.
 - `VIA_TRACE=1` in Claude Code's environment makes each run behind the relay write a trace: the prompt, every line the relay printed and each inbox line, with times, in `~/.claude/via/traces/<agent>-<time>.jsonl`. For development; pi, which runs without the relay, writes none. A trace holds everything the agent read, ran and printed, and every message and answer you sent it, so it may hold secrets: it is readable only by you, and nothing deletes it.
 - `relay/codex-acp/` is the lockfile `codex-acp` installs from (`npm ci --ignore-scripts`); `hooks/install.ts` does the install.
 - `hooks/acp/` is the generic ACP client; `pnpm lint` fails if it imports anything of `via`'s.
-- Each Claude Code permission mode means the same for every harness, in its nearest terms: never more than the person gave Claude, and no less unless the harness has nothing closer. An ACP harness's mode table (`AcpModes`, `hooks/acp/spec.ts`) must name every mode, so a new one is a type error until each harness maps it; a row that is the same as default says why.
+- Each Claude Code permission mode means the same for every harness, in its nearest terms: never more than the person gave Claude, and no less unless the harness has nothing closer. An ACP harness's mode table (`AcpModes`, `hooks/acp/spec.ts`) must name every mode, so a new one is a type error until each harness maps it; each harness's tests pin its rows.
 - `hooks/record.ts` keeps one record per agent in `$.store`, so an agent continued in a new process still has its session, mode and last answer. `hooks/agents.ts` serves the `agents` tool (`$.tool.register`) from those records: list, open (an adapter's `reopen`) and forget (an adapter's `forget`, a run of the relay's `RELAY_DELETE`, after `$.ui.ask`).
 - `hooks/writer.ts` writes a run's steps, for `via` agents and their nested ones.
 - Harness tool calls reach Claude Code as calls to the MCP tool `step`, which runs nothing: `via` answers each with what the harness reported, and refuses a `step` call it didn't make.
@@ -25,7 +25,11 @@
 - A new test fails without the change it covers. Show it before committing.
 - No tokens and nothing of yours: the fake agent, the fake model and an empty HOME, no network beyond localhost. What only a real model can show goes in an eval (`evals/`, `pnpm eval`), with a cost cap.
 - A version a test depends on lives where Dependabot bumps it.
-- The first two hold by construction and by lint: the test runners pick up only TypeScript test files (`*.test.ts(x)`, `relay/test/**/*.test.mts`, `mcp/test/*.test.mts`), and Biome's test override in `biome.jsonc` refuses a timer, `global`, `globalThis` and `AbortSignal` in a test, and a test importing a JavaScript file of ours.
+- The first two hold by construction and by lint: the test runners pick up only TypeScript test files (`*.test.ts(x)`, `relay/test/**/*.test.mts`, `mcp/test/*.test.mts`), and Biome's test override in `biome.json` refuses a timer, `global`, `globalThis` and `AbortSignal` in a test, and a test importing a JavaScript file of ours.
+
+## Comments
+
+None in code (`checks/comments.mts` fails on any). A rule goes in a test, a type or a name; why a change was made, and what was tested live, goes in its commit message. Only directives stay: a lint rule's `biome-ignore` with its reason, and a bare `@ts-expect-error`. A comment that seems needed is a missing test or a better name.
 
 ## Commits
 

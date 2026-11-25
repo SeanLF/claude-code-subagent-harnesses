@@ -3,7 +3,6 @@ import { pi } from '../../hooks/adapters/pi'
 import { arrange, lines, run, runTurn, type Spawn, split } from '../helpers'
 
 const CWD = '/work/repo'
-// Captured from `pi -p --mode json` (pi 1.4.0, OpenRouter GLM flash, 2026-10-25), trimmed to the fields read.
 const CAPTURED = [
   { type: 'session', version: 3, id: 'cap', cwd: CWD },
   { type: 'tool_execution_start', toolCallId: 'c1', toolName: 'read', args: { path: 'a.txt' } },
@@ -76,9 +75,6 @@ test('the session registers an agent type only for a harness on PATH', async ($,
   })
   await $.session.start({ cwd: '/', surface: null, isInteractive: false })
   expect(seen).toEqual(['pi'])
-  // Its agent can call the tool of via's step server, which reports the harness's tool calls.
-  // Agent: the harness's own subagents show as agents nested under this one. SendMessage: a harness's question
-  // handed to the main agent.
   expect(tools).toEqual(['mcp__plugin_via_step__step', 'Agent', 'SendMessage'])
 })
 

@@ -12,7 +12,6 @@ import { cutOff, type RunResult, run } from './run'
 import { openInbox } from './steer'
 import type { Turn, World } from './world'
 
-// The options held, without those an empty config line dropped; none left is no config at all.
 function configOf(options: Readonly<Record<string, string>>): Readonly<Record<string, string>> | undefined {
   const kept = Object.entries(options).filter(([, value]) => value !== '')
   return kept.length > 0 ? Object.fromEntries(kept) : undefined
@@ -22,33 +21,24 @@ type StepHook = StreamHook<'turn.step'>
 type Engine = Parameters<StepHook>[0]
 type Step = Parameters<StepHook>[1]
 
-// Which harness runs an agent, from its record; else from agent.list, for an agent spawned before via loaded.
-// The record comes first: the new process of a session sent to the background resumes the agent as
-// general-purpose, and its step would go to Claude under the harness's model name.
 export async function adapterOf(w: World, $: Engine, agentId: string): Promise<Adapter | undefined> {
   if (w.others.has(agentId)) return undefined
   const record = await recordOf(w, $, agentId)
   const known = record ? w.adapters.get(record.harness) : undefined
   if (known) return known
   const agent = (await $.agent.list()).find((a) => a.id === agentId)
-  // Not listed yet: decide on a later step rather than caching a guess.
   if (agent === undefined) return undefined
   const [plugin, name = ''] = agent.type.split(':')
   const adapter = plugin === $.plugin.name ? w.adapters.get(name) : undefined
-  // The spawn's mode is unknown here, so the strictest: a read-only run, never one with more permission than
-  // the person gave. In memory only, so a store that failed to answer cannot lose the real record.
   if (adapter) w.records.set(agentId, { harness: adapter.name, handback: false, mode: 'plan', rebuilt: true })
   else w.others.add(agentId)
   return adapter
 }
 
-// The spawn's terms, or the engine's handback reminder in the agent's conversation.
 async function handbackOf($: Engine, agentId: string, record: AgentRecord): Promise<boolean> {
   return record.handback || (await handbackAsked($, agentId))
 }
 
-// Walks up from the session's folder: relative paths resolve there, and the root is its own parent.
-// Says `unchecked` when it cannot finish (a stat refused, or a hook withheld realPath): not proven clean.
 async function foundAbove(
   $: Engine,
   folder: string,
@@ -61,7 +51,6 @@ async function foundAbove(
     const hit = found !== undefined && skip !== undefined && found.realPath === skip ? undefined : found
     if (hit !== undefined && hit.kind !== 'dir') return hit.realPath ?? `${prefix}${folder}`
     if (hit?.kind === 'dir') {
-      // A folder that cannot be listed is not proven harmless.
       const entries = await $.fs.list(`${prefix}${folder}`).catch(() => undefined)
       if (entries === undefined || entries.some((entry) => !harmless.includes(entry.name))) return hit.realPath ?? `${prefix}${folder}`
     }
@@ -74,7 +63,6 @@ async function foundAbove(
   return 'unchecked'
 }
 
-// A guard that cannot prove a read-only run safe refuses it; the string says why.
 async function readOnlyGuard($: Engine, adapter: Adapter): Promise<Readonly<Record<string, string>> | string | undefined> {
   const guard = adapter.readOnlyGuard
   if (!guard) return undefined
@@ -82,10 +70,6 @@ async function readOnlyGuard($: Engine, adapter: Adapter): Promise<Readonly<Reco
   return (listed?.exitCode === 0 ? guard.env(listed.stdout) : undefined) ?? guard.why
 }
 
-// A step that runs nothing: the agent's last answer again, or that its run was cut off (a session sent to
-// the background, or a reload mid-run). Handed back once, when the agent hands back; Claude Code takes the
-// last text as the answer even after a handback, so an answer already handed back is repeated as text.
-// force: the turn's run answered without a handback and Claude Code stepped again, asking for one.
 async function* replay(
   w: World,
   $: Engine,
@@ -96,7 +80,6 @@ async function* replay(
   force = false,
 ): AsyncGenerator<TurnStepChunk, TurnStepResult> {
   const said = record.report || cutOff(adapter.name)
-  // A transcript that cannot be read leaves the spawn's terms: a replay never fails over it.
   if (!record.handedBack && (force || (await handbackOf($, agentId, record).catch(() => record.handback)))) {
     await updateRecord(w, $, agentId, { handedBack: true })
     return yield* deliver(adapter.name, e, 0, said, null)
@@ -104,7 +87,6 @@ async function* replay(
   return yield* respond(e, textChunks(said), said)
 }
 
-// A nested agent's steps: its harness subagent's rows and answer, read from its parent's run.
 async function* nestedStep(
   w: World,
   $: Engine,
@@ -116,7 +98,6 @@ async function* nestedStep(
 ): AsyncGenerator<TurnStepChunk, TurnStepResult> {
   let job = w.jobs.get(agentId)
   if (job === undefined) {
-    // After its answer, or a later message: the answer again.
     if (record.report !== undefined) return yield* replay(w, $, e, agentId, adapter, record)
     const abort = new AbortController()
     const handback = await handbackOf($, agentId, record)
@@ -131,8 +112,6 @@ async function* nestedStep(
     w.jobs.set(agentId, job)
   }
   const result = yield* pump(w, job, e, signal, joining($, agentId, job.turnId))
-  // Its answer, once it has one, for a later step and a new process. childRun has handed it back by then.
-  // Handed back only if that step did: a run that could not be followed ends as text.
   if (job.final?.answer) {
     const handedBack = job.final.toolUses.some((use) => use.name === HANDBACK_TOOL)
     await updateRecord(w, $, agentId, { report: job.final.answer, handedBack })
@@ -140,14 +119,10 @@ async function* nestedStep(
   return result
 }
 
-// A step's wait for its run's next chunk: the engine's bounded wait, see waitStep.
 function joining($: Engine, agentId: string, turnId: string): () => Promise<void> {
   return () => $.viaSteps.wait({ agentId, turnId })
 }
 
-// A run outlives the step that started it: each harness tool call ends a step with a call to via's
-// tool, whose tool.call hook reads the run on until the harness finishes that call (answerCall), and
-// the next step reads on from there. Whichever hook reads the run lends it its abort signal.
 export async function* turnStep(w: World, $: Engine, e: Step, next: Parameters<StepHook>[2]) {
   const agentId = e.agentId
   if (agentId === undefined) return yield* next(e)
@@ -155,8 +130,6 @@ export async function* turnStep(w: World, $: Engine, e: Step, next: Parameters<S
   const record = w.records.get(agentId)
   if (adapter === undefined || record === undefined) return yield* next(e)
   if (record.nested) {
-    // One another process spawned has no parent run here: its saved answer or the cut-off, never a new run
-    // of the harness on the nested agent's prompt.
     if (!w.nested.has(agentId)) return yield* replay(w, $, e, agentId, adapter, record)
     return yield* nestedStep(w, $, e, agentId, adapter, record, next.signal)
   }
@@ -175,7 +148,6 @@ export async function* turnStep(w: World, $: Engine, e: Step, next: Parameters<S
   return yield* pump(w, started, e, next.signal, joining($, agentId, e.turnId))
 }
 
-// Everything before the run: refusals answer at once; otherwise the run as a job.
 async function* begin(
   w: World,
   adapter: Adapter,
@@ -185,8 +157,6 @@ async function* begin(
   record: AgentRecord,
   turn: Turn,
 ): AsyncGenerator<TurnStepChunk, TurnStepResult | Job> {
-  // An answer before any run, saved and handed back as a run's would be: auto mode takes an answer only
-  // from a handback, and a later step repeats it as text.
   const say = async function* (text: string): AsyncGenerator<TurnStepChunk, TurnStepResult> {
     const handback = await handbackOf($, agentId, record).catch(() => record.handback)
     turn.done = true
@@ -215,7 +185,6 @@ async function* begin(
     ...(asked.model ? { model: asked.model } : {}),
     ...(asked.tools ? { tools: asked.tools } : {}),
     ...(asked.thinking ? { thinking: asked.thinking } : {}),
-    // A config line adds to or replaces the options held, one by one; an empty value drops its option.
     ...(asked.config ? { config: configOf({ ...held?.config, ...asked.config }) } : {}),
   }
   const changed =
@@ -223,11 +192,7 @@ async function* begin(
     merged.tools !== held?.tools ||
     merged.thinking !== held?.thinking ||
     JSON.stringify(merged.config) !== JSON.stringify(held?.config)
-  // What the person allows Claude itself, as the spawn carried it: plan mode is read-only here too.
   const mode = record.mode as Mode
-  // A read-only run takes none: the relay allows only model-tuning options, but a harness may file one that
-  // loosens its sandbox under one of those categories too. Refused before the record keeps them, or every
-  // later message would be refused as well.
   if (merged.config && (mode === 'plan' || merged.tools === 'read' || record.rebuilt)) {
     const refused = `A read-only ${adapter.name} run takes no config lines: an option could loosen what read-only enforces. Start a new agent without \`tools: read\`, outside plan mode, to use them.`
     return yield* say(refused)
@@ -235,7 +200,6 @@ async function* begin(
   if (changed) await updateRecord(w, $, agentId, { choice: merged })
 
   const withModel: Choice = merged.model ? merged : { ...merged, ...(defaultModel ? { model: defaultModel } : {}) }
-  // An agent with no record runs read-only (adapterOf): its refusals say so, not that the person chose it.
   const anyway = record.rebuilt
     ? `via has no record of the permission mode this agent was spawned with, so it runs read-only. Start a new agent to run it with your current mode.`
     : 'To run it anyway, start a new agent without `tools: read`, outside plan mode; or ask a harness that can enforce read-only.'
@@ -245,7 +209,6 @@ async function* begin(
       : `${adapter.name} cannot run in plan mode: it has no read-only mode that via can enforce. Leave plan mode to run it, or ask a harness that can enforce read-only.`
     return yield* say(refused)
   }
-  // Plan mode is read-only whatever tools line the prompt carries: a pi list such as `bash` would run commands.
   const chosen: Choice = mode === 'plan' ? { ...withModel, tools: adapter.tools?.[0] ?? 'read,grep,find,ls' } : withModel
   const unsafe = chosen.tools === 'read' ? adapter.unsafeReadOnly : undefined
   const ownHome = unsafe?.own ? (await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) : undefined
@@ -265,10 +228,8 @@ async function* begin(
   }
   const ready = await relayReady(w, $, adapter, w.latest.has(adapter.name))
   if (typeof ready === 'string') return yield* say(ready)
-  // Only this run's answer may answer a later step that runs nothing: an aborted run leaves none.
   await updateRecord(w, $, agentId, { report: '', handedBack: false })
   const abort = new AbortController()
-  // The run keeps this step's `$` for its whole life, through later steps and tool calls.
   return {
     turnId: e.turnId,
     abort,
@@ -291,7 +252,6 @@ async function* begin(
   }
 }
 
-// What one run needs, settled before it starts.
 type Drive = {
   adapter: Adapter
   e: { turnId: string; index: number }
@@ -306,9 +266,6 @@ type Drive = {
   signal: AbortSignal
 }
 
-// So another Claude Code session's agents tool sees this run (hooks/agents.ts): until this session's own timeout, and
-// a minute's grace, from now; set again for each run an interrupt starts. Best effort: a clock that fails leaves the
-// run unmarked, never the run unstarted.
 async function holdUntil(w: World, $: EngineInterface, agentId: string): Promise<void> {
   const now = await Promise.resolve()
     .then(() => $.clock.now())
@@ -316,8 +273,6 @@ async function holdUntil(w: World, $: EngineInterface, agentId: string): Promise
   if (now !== undefined) await updateRecord(w, $, agentId, { runningUntil: now + (w.timeoutMinutes + 1) * 60_000 })
 }
 
-// The run's mark on its record goes when it ends, however it ends; one this process never clears (it died) lapses
-// on its own, as no run outlives timeoutMinutes.
 async function* drive(w: World, $: EngineInterface, d: Drive): AsyncGenerator<TurnStepChunk | Mark, TurnStepResult> {
   await holdUntil(w, $, d.agentId)
   try {
@@ -333,7 +288,6 @@ async function* driveRun(w: World, $: EngineInterface, d: Drive): AsyncGenerator
   let block = 0
   let result: RunResult
   const models = chosen.model ? await cachedModels($, adapter, w.defaultModel) : []
-  // An interrupted run is followed at once by its message, on the same session.
   for (;;) {
     const session = record.session
     const inbox = adapter.steer ? await openInbox($, adapter.name, agentId, w.inboxes) : undefined
@@ -349,7 +303,6 @@ async function* driveRun(w: World, $: EngineInterface, d: Drive): AsyncGenerator
       models,
       block,
       guard,
-      // Saved the moment the harness issues it: a reload mid-run must not lose the session.
       save: async (id) => {
         if (id !== session) await updateRecord(w, $, agentId, { session: id })
       },
@@ -361,7 +314,6 @@ async function* driveRun(w: World, $: EngineInterface, d: Drive): AsyncGenerator
     await holdUntil(w, $, agentId)
   }
   if (result.aborted) return yield* respond(e, [{ kind: 'stop', stopReason: 'end_turn', usage: null }], '')
-  // The run has answered: a transcript that cannot be read must not cost the answer.
   const handback = await handbackOf($, agentId, record).catch(() => record.handback)
   turn.done = true
   await updateRecord(w, $, agentId, { report: result.signed, handedBack: handback })

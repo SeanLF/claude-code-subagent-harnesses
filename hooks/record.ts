@@ -1,37 +1,28 @@
 import type { EngineInterface } from 'claude-code'
 import type { Choice } from '../types'
 
-// Everything via knows about one of its agents, in one place. Kept in $.store, the one tier that outlives
-// the process: a session sent to the background continues in a new process with none of the spawn's
-// memory, and $.state only survives a reload of the plugin's code.
 export type AgentRecord = {
   harness: string
-  nested?: true // a harness's own subagent: only its parent's run can answer it
-  handback: boolean // spawned locally in auto mode: its answer goes back as a SubagentHandback
-  mode: string // Claude Code's permission mode at the spawn
-  description?: string // the spawn's Agent description
-  choice?: Choice // the model, tools, thinking and config its prompts asked for
-  session?: string // the harness's session, which its next turn resumes
-  cwd?: string // the folder its harness runs in: the Claude Code session's, at the spawn
-  // A run holds the session until then (ms), in this or another Claude Code session: its own timeout and a minute
-  // past it, renewed by each run an interrupt starts, so a session that died mid-run can't hold its agent forever.
+  nested?: true
+  handback: boolean
+  mode: string
+  description?: string
+  choice?: Choice
+  session?: string
+  cwd?: string
   runningUntil?: number
-  report?: string // its last answer
-  handedBack?: boolean // that answer has gone back
-  // Made up in this process for an agent with no record it could read (spawned before via loaded, evicted, or
-  // a store that failed): never stored, so it cannot overwrite the real one.
+  report?: string
+  handedBack?: boolean
   rebuilt?: true
 }
 
 export type Records = {
   records: Map<string, AgentRecord>
-  writing?: Promise<void> // one write at a time, or two spawns at once drop each other from the index
-  unsaved?: true // a store failure was logged: once per process
-  cleared?: true // 0.8's roster, under 'agents', is gone
+  writing?: Promise<void>
+  unsaved?: true
+  cleared?: true
 }
 
-// The store holds 4 MiB of JSON in all, shared with the model lists: KEPT agents with answers of at most
-// REPORT_KEPT characters stay well under it (about 2.3 MiB at worst, all of it CJK), so it cannot fill and stop saving.
 const INDEX = 'agent-ids'
 const KEPT = 50
 const REPORT_KEPT = 16_000
@@ -41,7 +32,6 @@ type Store = Pick<EngineInterface, 'store' | 'ui'>
 const isRecord = (value: unknown): value is AgentRecord =>
   typeof value === 'object' && value !== null && typeof (value as AgentRecord).harness === 'string'
 
-// Said once: an agent resumed after a restart then has no record, and runs read-only without its answer.
 function unsaved(w: Records, $: Store, error: unknown): void {
   if (w.unsaved) return
   w.unsaved = true
@@ -56,13 +46,11 @@ function unsaved(w: Records, $: Store, error: unknown): void {
   } catch {}
 }
 
-// From memory, or from the store for an agent another process spawned.
 export async function recordOf(w: Records, $: Store, agentId: string): Promise<AgentRecord | undefined> {
   const held = w.records.get(agentId)
   if (held !== undefined) return held
   const stored = await $.store.get(keyOf(agentId)).catch((error: unknown) => unsaved(w, $, error))
   if (!isRecord(stored)) return undefined
-  // A spawn that landed while the store answered wins: it is newer.
   const raced = w.records.get(agentId)
   if (raced !== undefined) return raced
   w.records.set(agentId, stored)
@@ -74,15 +62,12 @@ function persist(w: Records, $: Store, write: () => Promise<void>): Promise<void
   return w.writing
 }
 
-// As stored: a long answer keeps its end, where the signature and any failure are.
 function stored(record: AgentRecord): AgentRecord {
   const report = record.report
   if (report === undefined || report.length <= REPORT_KEPT) return { ...record }
   return { ...record, report: `[earlier part cut; the whole answer is in the transcript]\n…${report.slice(-REPORT_KEPT)}` }
 }
 
-// A new agent: in memory at once, so a first step that runs before the store answers still sees it. The
-// newest KEPT stay in the store. A failed index read aborts the write rather than lose the index.
 export function createRecord(w: Records, $: Store, agentId: string, record: AgentRecord): Promise<void> {
   w.records.set(agentId, record)
   return persist(w, $, async () => {
@@ -98,7 +83,6 @@ export function createRecord(w: Records, $: Store, agentId: string, record: Agen
   })
 }
 
-// A change to a known agent: in memory at once, then stored. An agent with no record has nothing to change.
 export function updateRecord(w: Records, $: Store, agentId: string, change: Partial<AgentRecord>): Promise<void> {
   const held = w.records.get(agentId)
   if (held === undefined) return Promise.resolve()
@@ -108,16 +92,12 @@ export function updateRecord(w: Records, $: Store, agentId: string, change: Part
   return persist(w, $, () => $.store.set(keyOf(agentId), snapshot))
 }
 
-// A record as the store holds it now, after this process's own writes: another Claude Code session may have
-// changed it since this one read it (its session, a run's mark). Memory only for one never stored (rebuilt).
 export async function freshRecord(w: Records, $: Store, agentId: string): Promise<AgentRecord | undefined> {
   await w.writing
   const stored = await $.store.get(keyOf(agentId)).catch(() => undefined)
   return isRecord(stored) ? stored : w.records.get(agentId)
 }
 
-// The stored agents, newest first: the index is in spawn order. An id whose record is gone is skipped. Read
-// fresh, and not kept in memory, where a step would take them over another session's later changes.
 export async function listRecords(w: Records, $: Store): Promise<[string, AgentRecord][]> {
   await w.writing
   const listed = await $.store.get(INDEX)
@@ -126,8 +106,6 @@ export async function listRecords(w: Records, $: Store): Promise<[string, AgentR
   return found.flatMap(([id, record]) => (isRecord(record) ? [[id, record] as [string, AgentRecord]] : [])).reverse()
 }
 
-// An agent forgotten: gone from memory, the index and the store, after any write in flight. Rejects when the
-// store refuses, so the person is told; the queue goes on either way.
 export function forgetRecord(w: Records, $: Store, agentId: string): Promise<void> {
   w.records.delete(agentId)
   const done = (w.writing ?? Promise.resolve()).then(async () => {

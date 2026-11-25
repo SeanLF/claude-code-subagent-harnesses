@@ -1,9 +1,3 @@
-// Live checks for an ACP agent behind relay/relay.mjs: stream, interrupt, resume, stop, refused model, steer.
-// They spend tokens, so nothing runs them but a person.
-// Usage: RELAY_STEER=steering|prompt node relay/checks/check.mts <workdir> <model> <bad-model> -- <agent command...>
-//
-// Each run's lines are kept in <workdir>/<check>.jsonl and its stderr in <check>.err. A check that needs a
-// command running asks the agent to run one that writes its `sleep`'s pid once it runs, and waits on that file.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { RelayKind } from '../../hooks/acp/wire-relay.ts'
@@ -31,8 +25,6 @@ const work = workdir(given)
 mkdirSync(work, { recursive: true })
 const inbox = resolve(work, 'inbox.jsonl')
 
-// The checks are about the connection, not permissions: approve what the agent asks. A live turn can take
-// minutes, so a run's backstop is long; it only ends a run that hangs.
 const options = (prompt: string, env: Record<string, string> = {}): RelayOptions => ({
   agent,
   prompt,
@@ -46,7 +38,6 @@ const keep = (name: string, run: { events: readonly Printed[]; stderr: string })
 }
 const seconds = (since: number) => `${Math.round((Date.now() - since) / 1000)}s`
 
-/** Starts a run whose prompt asks for `sleep <n>`, and resolves with the sleep's pid once it runs, or undefined. */
 async function sleepingRun(n: number, then: string, env: Record<string, string> = {}) {
   const pidFile = resolve(work, `sleep-${n}.pid`)
   rmSync(pidFile, { force: true })
@@ -58,7 +49,6 @@ async function sleepingRun(n: number, then: string, env: Record<string, string> 
   if (pid === undefined) console.log('  sleep never started')
   return { run, pid }
 }
-/** Says whether the sleep outlived its run, and ends it if so. */
 const orphan = (pid: number | undefined) => {
   if (pid === undefined) return
   if (!alive(pid)) return console.log('  no orphan sleep')
@@ -106,7 +96,6 @@ console.log('== 4 stop')
 {
   const { run, pid } = await sleepingRun(61, 'Then reply SLEPT.')
   run.stop()
-  // A stopped relay ends at once; one still running after this long is reported, then killed by its backstop.
   let late = false
   const cancel = backstop(10_000, () => {
     late = true
@@ -144,7 +133,6 @@ console.log('== 6 steer')
   keep('steer', run)
   console.log(`  exit ${status}`)
   summary(run.events)
-  // One prompt whose answer has STEERED: the message reached the running prompt, not a second one.
   const count = (name: RelayKind) => relayEventsNamed(run.events, name).length
   console.log(`  prompts: ${count('prompt_done')}, steered: ${count('steered')}`)
   orphan(pid)

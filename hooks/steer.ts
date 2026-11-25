@@ -18,8 +18,6 @@ import {
 } from './questions'
 import type { World } from './world'
 
-// interrupt: what an `interrupt:` message asked for; the harness aborts its step, and the core runs it next.
-// files: the folder beside it where the relay saves what the agent sends as bytes.
 export type Inbox = { name: string; path: string; files: string; lines: string[]; interrupt?: string }
 
 const INTERRUPT = /^interrupt:[ \t]*/i
@@ -34,8 +32,6 @@ export async function openInbox(
   agentId: string,
   inboxes: Map<string, Inbox>,
 ): Promise<Inbox | undefined> {
-  // Not $TMPDIR: on Linux it can be the shared /tmp, where another user could plant the
-  // folder and write steers or a symlink (fs.write follows links). No usable home: no steering.
   const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
   if (!home) return undefined
   const inbox: Inbox = {
@@ -63,12 +59,10 @@ export async function closeInbox(
   await $.fs.write(inbox.path, '').catch(() => {})
 }
 
-// Steers are JSON strings; an interrupt line is an object the harness acts on, never a message it reports.
 export function undeliveredSteers(inbox: Inbox | undefined, steered: number): string[] {
   const steers = (inbox?.lines ?? [])
     .map((line) => JSON.parse(line) as InboxLine)
     .filter((value): value is string => typeof value === 'string')
-  // The first user message the harness reports is the prompt; each later one is a steer it took.
   return steers.slice(Math.max(0, steered - 1))
 }
 
@@ -89,26 +83,18 @@ export async function sendMessage(w: World, $: Parameters<SendHook>[0], e: Param
     agentId = named !== undefined && w.inboxes.has(named.id) ? named.id : undefined
   }
   const inbox = agentId === undefined ? undefined : w.inboxes.get(agentId)
-  // An idle-notice subscription is the engine's to keep, so the call goes on to it.
   if (agentId === undefined || inbox === undefined || message === undefined || e.notify_when_idle) return next(e)
-  // While a question of its harness's waits on the main agent, the main agent's message to it is the answer; an
-  // interrupt, or another agent's message, is not.
   const handed = w.handed.get(agentId)?.[0]
-  // A question handed from a run this inbox replaced: nothing waits on its answer.
   if (handed !== undefined && handed.inbox !== inbox) w.handed.delete(agentId)
-  // Only a question the main agent was sent: one still waiting its turn has not been asked of it.
   else if (handed?.sent && e.agentId === undefined && !INTERRUPT.test(message)) return answerHanded($, w, agentId, handed, message)
   const interrupted = await steer($, inbox, message)
   return { result: { success: true, message: interrupted ? interruptDelivered(inbox.name) : steerDelivered(inbox.name) } }
 }
 
-// A message for a running harness, into its inbox: a steer, or with `interrupt:` an interrupt, whose
-// message runs next. True for an interrupt.
 export async function steer($: Pick<EngineInterface, 'fs'>, inbox: Inbox, message: string): Promise<boolean> {
   const asked = INTERRUPT.test(message) ? message.replace(INTERRUPT, '') : undefined
   const line: InboxLine = asked === undefined ? message : { interrupt: asked }
   const lines = [...inbox.lines, JSON.stringify(line)]
-  // Taken before the write: a typed message and a SendMessage at once would otherwise drop one another.
   inbox.lines = lines
   await $.fs.write(inbox.path, lines.map((line) => `${line}\n`).join(''))
   if (asked === undefined) return false
@@ -116,9 +102,6 @@ export async function steer($: Pick<EngineInterface, 'fs'>, inbox: Inbox, messag
   return true
 }
 
-// What the person typed into an agent's view while it ran, from the attachment Claude Code delivers at
-// the agent's next step ("The user sent a new message while you were working: ..."); '' when the framing
-// is not that one, never a guess: other deliveries share the attachment.
 export function typed(content: readonly unknown[]): string {
   const text = content
     .map((block) =>
@@ -135,14 +118,8 @@ export function typed(content: readonly unknown[]): string {
 }
 
 const VERB: Record<string, string> = { execute: 'run', edit: 'edit', delete: 'delete', move: 'move', fetch: 'fetch', read: 'read' }
-// The whole command, as it will run: line breaks shown, never clipped, and control, bidirectional and
-// zero-width characters dropped, so what the dialog shows cannot be disguised.
 const shown = (text: string) => unhidden(text.replace(/\r?\n/g, ' ⏎ ')).trim()
 
-// A harness waiting on the person's permission: notify them, ask in Claude Code's own dialog with the
-// harness's own option names, and write the chosen option to the inbox. A dismissed dialog, a -p run
-// (no one to ask), free text or an AFK auto-resolve is a deny. An answer that arrives after its run
-// ended writes nothing: that inbox is no longer the live one.
 export async function answerAsk(
   $: Pick<EngineInterface, 'ui' | 'fs'>,
   inboxes: Map<string, Inbox>,
@@ -152,7 +129,6 @@ export async function answerAsk(
   name: string,
 ): Promise<void> {
   if (inbox === undefined) return
-  // Only this once: an "always" option can amend the harness's own rules, which outlive via's run.
   const allow = ask.options.filter((o) => o.kind === 'allow_once')
   const deny = ask.options.find((o) => o.kind === 'reject_once') ?? ask.options.find((o) => o.kind === 'reject_always')
   const choices = new Map<string, string | null>()
@@ -169,19 +145,15 @@ export async function answerAsk(
   await answered($, inboxes, agentId, inbox, { answer: ask.id, optionId })
 }
 
-// An answer into the inbox it was asked from: not into one a later run opened in its place.
 async function answered($: Pick<EngineInterface, 'fs'>, inboxes: Map<string, Inbox>, agentId: string, inbox: Inbox, line: InboxLine) {
   if (inboxes.get(agentId) !== inbox) return
   inbox.lines = [...inbox.lines, JSON.stringify(line)]
   await $.fs.write(inbox.path, inbox.lines.map((l) => `${l}\n`).join('')).catch(() => {})
 }
 
-// What the person did with a question: MCP's elicitation result, as Claude Code's form returns it.
 type Reply = { action: 'accept'; content: Record<string, unknown> } | { action: 'decline' } | { action: 'cancel' }
 const CANCEL: Reply = { action: 'cancel' }
 
-// The step server's answer, as a tool.call hook reads an MCP tool's result: its content blocks, the first a text
-// block holding the reply as JSON. Anything else is a cancel.
 function replyOf(result: unknown): Reply {
   const text = Array.isArray(result) ? (result[0] as { text?: unknown } | undefined)?.text : undefined
   let reply: { action?: unknown; content?: unknown } = {}
@@ -203,9 +175,6 @@ const saidOf = (reply: Reply) =>
     ? `${SAID.accept}: ${JSON.stringify(reply.content)}`
     : SAID[reply.action]
 
-// A dialog via opens with $.ui.ask, which takes one question and resolves with a label alone: via's own hook on
-// that AskUserQuestion call (showQuestions) shows these questions in its place and keeps the whole result.
-// stop: the harness closed the question, so the dialog goes. result: the answers, or how long the person was away.
 export type Pending = {
   id: number
   questions: Shown[]
@@ -214,12 +183,7 @@ export type Pending = {
   result?: { answers: Readonly<Record<string, unknown>> } | { away: number }
   done: Promise<void>
 }
-// interactive: a person is at the prompt (not -p, not the SDK). background: via agents running in the background,
-// whose questions can go to the main agent while they wait; a foreground one's message would reach it only once
-// the agent's turn ends.
 export type Asking = { asking: Map<number, Pending>; asked: number; interactive: boolean; background: Set<string> }
-// A question handed to the main agent: the questions it answers, and what the person already answered.
-// send: the message that hands it over, sent when it reaches the front of the line; sent, once it has gone.
 export type Handed = {
   id: string
   inbox: Inbox
@@ -230,8 +194,6 @@ export type Handed = {
   sent?: true
 }
 
-// The person's askUserQuestionTimeout setting. Claude Code's own idle timer leaves a plugin's dialog alone
-// (seen live on 2.1.331: a "60s" dialog was still up after two minutes), so via times it, from when it opens.
 const AWAY: Readonly<Record<string, number>> = { '60s': 60_000, '5m': 300_000, '10m': 600_000 }
 async function awayAfter($: Pick<EngineInterface, 'settings'>): Promise<number | undefined> {
   const set = await $.settings.read({ key: 'askUserQuestionTimeout' }).catch(() => undefined)
@@ -241,8 +203,6 @@ const duration = (ms: number) =>
   ms % 60_000 === 0 ? `${ms / 60_000} minute${ms === 60_000 ? '' : 's'}` : `${Math.round(ms / 1000)} seconds`
 
 type AskHook = MatchedHook<'tool.call', { tool: 'AskUserQuestion' }>
-// The hook on AskUserQuestion: a dialog of via's shows its questions, and is dismissed when the person's timeout
-// passes or the harness closes the question. Any other dialog goes on as it was.
 export async function showQuestions(
   w: Asking,
   $: Pick<EngineInterface, 'settings' | 'viaQuestions'>,
@@ -262,19 +222,14 @@ export async function showQuestions(
   })
   const away = ms === undefined ? new Promise<never>(() => {}) : timeout($, pending.id, ms)
   const done = await Promise.race([asked, stopped, away])
-  // Answering the call first dismisses the dialog. afkTimeoutMs is Claude Code's own field, refused from a hook, so
-  // the timeout passing is kept on the pending dialog alone.
   if (done === 'away' && ms !== undefined) pending.result = { away: ms }
   if (done === 'stopped' || done === 'away') return { result: { questions: pending.questions, answers: {} } }
   const result = done.deny === undefined && isRecord(done.result) ? done.result : undefined
-  // Claude Code's own idle timer, should it ever cover this dialog.
   if (typeof result?.afkTimeoutMs === 'number') pending.result = { away: result.afkTimeoutMs }
   else if (isRecord(result?.answers)) pending.result = { answers: result.answers }
   return done
 }
 
-// The person's timeout, waited in slices: the engine answers a noun within ten seconds (seen live: a whole minute's
-// wait failed the hook at 10 s). Never settles once the dialog has.
 const SLICE = 5_000
 async function timeout($: Pick<EngineInterface, 'viaQuestions'>, id: number, ms: number): Promise<'away'> {
   for (let left = ms; left > 0; left -= SLICE)
@@ -282,8 +237,6 @@ async function timeout($: Pick<EngineInterface, 'viaQuestions'>, id: number, ms:
   return 'away'
 }
 
-// The engine's wait for one slice of the person's timeout: true when it passes, false once the dialog settled first.
-// Inside the engine, as a hook's own wait is charged to its ten-second budget.
 export function awayWait(w: Asking, id: number, ms: number, after: (ms: number, wake: () => void) => Timer): Promise<boolean> {
   const pending = w.asking.get(id)
   if (pending === undefined) return Promise.resolve(false)
@@ -296,7 +249,6 @@ export function awayWait(w: Asking, id: number, ms: number, after: (ms: number, 
   })
 }
 
-// One dialog: the questions, through $.ui.ask and showQuestions. undefined: dismissed, or the call failed.
 async function dialog($: Pick<EngineInterface, 'ui'>, w: Asking, questions: Shown[], stop: AbortSignal): Promise<Pending['result']> {
   let settle!: () => void
   w.asked += 1
@@ -323,14 +275,10 @@ type Outcome = { reply: Reply } | { hand: { why: string; handed: Asked[]; conten
 const NO_ONE = 'no one can be asked in this session'
 const ASKS = 3
 
-// The person's answer in Claude Code's AskUserQuestion dialog, asked again with what was wrong while it doesn't fit
-// the form. "Let Claude answer", the person's timeout passing, or no one to ask hands the question to the main agent,
-// where that's offered; otherwise the last two are a cancel.
 async function fromPerson($: Pick<EngineInterface, 'ui'>, w: Asking, plan: Plan, stop: AbortSignal): Promise<Outcome> {
   if (!w.interactive) return plan.offer ? { hand: { why: NO_ONE, handed: plan.asked, content: {} } } : { reply: CANCEL }
   let note = ''
   for (let tries = 0; ; tries += 1) {
-    // An answer that still doesn't fit after a few asks is no answer.
     if (tries === ASKS || stop.aborted) return { reply: CANCEL }
     const questions = shownOf(plan, note)
     const got = await dialog($, w, questions, stop)
@@ -353,12 +301,6 @@ async function fromPerson($: Pick<EngineInterface, 'ui'>, w: Asking, plan: Plan,
 const isQuestion = (q: unknown): q is Question =>
   isRecord(q) && typeof q.id === 'string' && typeof q.message === 'string' && (q.mode === 'form' || q.mode === 'url')
 
-// The tool.call hook on a step call that asks the person. A question Claude Code's AskUserQuestion dialog can show
-// is asked there; any other (a link to open, a form that doesn't map) goes through to the step server, which asks
-// in Claude Code's MCP form. The reply goes back to the harness through the inbox; no answer, a cancel. A question
-// handed to the main agent goes to it as a SendMessage from this agent, the step's next call, and its answer comes
-// back through sendMessage. A question the harness closes first (an interrupt, or it withdrew it) ends the wait: the
-// relay has cancelled it, and a later answer would go nowhere.
 export async function answerQuestion(
   $: Pick<EngineInterface, 'fs' | 'ui' | 'agent'>,
   w: Pick<World, 'calls' | 'inboxes' | 'jobs' | 'handed' | 'records'> & Asking,
@@ -393,7 +335,6 @@ export async function answerQuestion(
       () => undefined,
     )
     const to = named || ref.agentId
-    // The run may have ended while the name was looked up: then nothing waits on the answer.
     if (job === undefined || w.jobs.get(ref.agentId) !== job || job.final !== undefined || job.abort.signal.aborted) {
       await answered($, w.inboxes, ref.agentId, inbox, { question: ref.id, answer: CANCEL })
       return { result: saidOf(CANCEL) }
@@ -408,8 +349,6 @@ export async function answerQuestion(
     const line = w.handed.get(ref.agentId) ?? []
     line.push({ id: ref.id, inbox, harness, handed: done.hand.handed, content: done.hand.content, send })
     w.handed.set(ref.agentId, line)
-    // The step's next call, ahead of whatever the run said meanwhile. One open with the main agent at a time, so
-    // its answer is read onto the question it was asked; a later one goes when that one is answered or closed.
     if (line.length === 1) job.held.unshift(send)
     return {
       result: `Handed to the main agent${line.length === 1 ? '' : ', after the question it was already asked'}: ${done.hand.why}.`,
@@ -420,8 +359,6 @@ export async function answerQuestion(
   return { result: saidOf(reply) }
 }
 
-// The main agent's message to an agent whose question it was handed: the answer, onto the harness's form. A message
-// that doesn't fit is refused with why, the question still open.
 async function answerHanded(
   $: Pick<EngineInterface, 'fs'>,
   w: Pick<World, 'inboxes' | 'handed' | 'jobs'>,

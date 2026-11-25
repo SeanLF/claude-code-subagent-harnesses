@@ -3,7 +3,6 @@ import { agentInfo, agentStore, NODE, run, runTurn, STEP } from './helpers'
 
 type On = Parameters<TestBody>[1]
 
-// What the engine does when via's turn.step hook is skipped: the request goes to the model.
 function fallback(on: On) {
   let requests = 0
   on('turn.step', async function* (_, e) {
@@ -14,8 +13,6 @@ function fallback(on: On) {
   return () => requests
 }
 
-// Captured 2026-10-28 from relay/relay.mjs over codex-acp 2.3.1-preview.8, trimmed
-// (copied from tests/children.test.ts).
 const ROOT = '01a18155-81d4-7ba0-8246-5cba1d8adb3b'
 const CHILD = `${ROOT}:subagent:01a18155-8b4f-7403-bb8f-f472976c48cd`
 const MODEL = {
@@ -31,8 +28,6 @@ const CAPTURED = [
   { sessionId: ROOT, update: { sessionId: CHILD, state: { stopReason: 'end_turn', state: 'idle' }, sessionUpdate: 'subagent_update' } },
 ]
 
-// A parent's run pauses at its Agent call; its next step supplies the child's answer, so the nested agent sits
-// on its empty queue until then (from #24's fixture).
 async function nestedChild(
   $: Parameters<TestBody>[0],
   on: On,
@@ -43,10 +38,8 @@ async function nestedChild(
 ) {
   const clock = mock.clock(on)
   mock.env(on, { HOME: '/home/u' })
-  // The record the parent's spawn left.
   const store = agentStore(on, { a1: { harness: 'codex' } })
   on('agent.list', () => ({ value: [agentInfo({ id: 'a1', description: 'parent', type: 'via:codex' })] }))
-  // A refused transcript read throws inside via's step: any throw there does the same.
   on('session.messages', (_, e) => (refused === 'transcript' && e.agentId === 'n1' ? { deny: 'transcript unavailable' } : { value: [] }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('agent.spawn', (_, e) => ({ agentId: 'n1', model: e.model ?? 'codex' }))
@@ -158,8 +151,6 @@ test("a nested agent's spawn and answer are kept for a new process", async ($, o
   expect(child.store.record('n1')?.report).toBe(result.answer)
 })
 
-// A new process (a session sent to the background) resumes a nested agent as general-purpose, with no
-// spawn and no parent run: its saved answer, or the cut-off, and never a request to the model.
 function newProcess(on: On, report?: string, handback?: { handedBack: boolean }) {
   mock.env(on, { HOME: '/home/u' })
   on('agent.list', () => ({ value: [agentInfo({ id: 'n1', description: 'List acp', type: 'general-purpose' })] }))
@@ -193,7 +184,6 @@ test('a nested agent in a new process answers with its saved answer', async ($, 
 test('a nested agent in a new process with no saved answer says it was cut off, and runs nothing', async ($, on) => {
   const fresh = newProcess(on)
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
-  // Even with a turn: the nested agent's prompt is its parent's harness's to run, not a new run's.
   await $.turn.start({ turnId: 'resumed', agentId: 'n1', text: 'List acp' })
   const { result } = await run($, { ...STEP, turnId: 'resumed', agentId: 'n1' })
   expect(result.answer).toContain('codex run was cut off before it answered')
@@ -231,8 +221,6 @@ test("an auto-mode nested agent's handback is marked done once it hands back, fo
   expect(child.store.record('n1')?.handedBack).toBe(true)
 })
 
-// The same as a top-level run: a child that answers and then makes one last call ends in a step of its own,
-// and Claude Code takes that step's text as the nested agent's answer.
 test("a nested child's answer said before its last call is said again in its last step", async ($, on) => {
   const child = await nestedChild($, on, undefined, undefined, false, [
     { sessionId: CHILD, update: { toolCallId: 'x', title: 'ls', kind: 'read', status: 'in_progress', sessionUpdate: 'tool_call' } },

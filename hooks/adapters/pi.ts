@@ -5,9 +5,6 @@ import type { PiEvent } from '../wire'
 
 const THINKING = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
-// A tool list of these only is read-only. Such a run ignores the project's trust-gated .pi
-// resources (-na): a project the user once trusted would otherwise load its extensions, which are
-// code (tested live: a saved trust ran one, -na stopped it; -e extensions such as the inbox still load).
 const READ_TOOLS = new Set(['read', 'grep', 'find', 'ls'])
 const readsOnly = (tools: string) => tools.split(',').every((tool) => READ_TOOLS.has(tool.trim()))
 
@@ -22,8 +19,6 @@ function parse(line: string): Record<string, unknown> | undefined {
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
-// pi's own tools as ACP kinds, so their rows draw and fold as Codex's do; any other tool (an extension's,
-// an MCP server's) is `other`, titled with its arguments.
 const KINDS: Record<string, string> = {
   read: 'read',
   edit: 'edit',
@@ -55,16 +50,11 @@ function titleOf(tool: string, args: Record<string, unknown>): string {
   }
 }
 
-// What a finished tool returned: an edit as its changed lines (from the unified patch pi reports), a write
-// as the lines it wrote, anything else as its text content. A command keeps the end of a long output, where
-// an error usually is and where pi names a nonzero exit code. A failed write is its error: its lines never landed.
 function outputOf(tool: string, args: Record<string, unknown>, result: unknown, failed: boolean, cwd: string): string {
   const r = isRecord(result) ? result : {}
   const path = relative(text(args.path), cwd)
   const patch = isRecord(r.details) ? text(r.details.patch) : ''
   const lines = patch.split('\n')
-  // One file's patch: its ---/+++ header ends where the first hunk starts. A patch with no hunk falls
-  // through to the text, which says what happened.
   const first = lines.findIndex((l) => l.startsWith('@@'))
   if (tool === 'edit' && first >= 0) {
     const hunks = lines.slice(first)
@@ -79,14 +69,10 @@ function outputOf(tool: string, args: Record<string, unknown>, result: unknown, 
   return tool === 'bash' ? tail(output, 2000) : cap(output, 2000)
 }
 
-// pi has no permission modes, so Claude Code's map to nothing closer: plan mode, like tools: read, gives it reading
-// tools only (turn.ts); every other mode runs pi's own tools, which never ask (AcpModes, hooks/acp/spec.ts).
 export const pi = {
   name: 'pi',
   bin: 'pi',
   about: "pi CLI agent: any provider's model, own tools (edits files).",
-  // A table under a header row: provider, model, then its limits, sorted by name; pi's default is in
-  // its settings.
   catalogue: {
     argv: ['pi', '--list-models'],
     preferred: {
@@ -115,8 +101,6 @@ export const pi = {
   steer: true,
   defaultModel: true,
   sessionOf: (agentId) => `pi-${agentId}`,
-  // pi resumes a session in its own working folder (docs/cli.md). Between runs only: a second pi on the session is a
-  // second writer of its file. pi has no delete to call: its /resume picker deletes sessions.
   reopen: { argv: (session) => ['pi', '--session', session], midRun: false },
   start: ({ choice, prompt, agentId, root, inbox }) => ({
     argv: [
@@ -137,14 +121,11 @@ export const pi = {
   }),
   events: () => {
     let cwd = ''
-    // A call's arguments, for its output when it ends: a write's content is only in them.
     const args = new Map<string, Record<string, unknown>>()
     let compactions = 0
     return (line): Norm[] => {
       const raw = parse(line)
-      // The session header, which is not one of pi's typed events, names the working folder.
       if (raw?.type === 'session' && typeof raw.cwd === 'string') cwd = raw.cwd.replace(/\/+$/, '')
-      // The type is pi's promise about its output, not a check of it: fields stay optional-chained.
       const e = raw as PiEvent | undefined
       switch (e?.type) {
         case 'message_start':
@@ -171,11 +152,9 @@ export const pi = {
         case 'tool_execution_start': {
           const given = isRecord(e.args) ? e.args : {}
           const tool = text(e.toolName)
-          // A call with no id cannot be matched to its end: it stays a text line.
           if (typeof e.toolCallId !== 'string') return [{ k: 'tool', t: `\n▸ ${clip(`${tool}: ${JSON.stringify(given)}`)}\n` }]
           args.set(e.toolCallId, given)
           const path = text(given.path)
-          // Only an absolute path links to its file.
           const absolute = path.startsWith('/') ? path : path && cwd ? `${cwd}/${path}` : ''
           return [
             {
@@ -187,7 +166,6 @@ export const pi = {
             },
           ]
         }
-        // pi compacts its own context: a row, as Claude Code shows its own compaction.
         case 'compaction_start':
           compactions += 1
           return [{ k: 'call', id: `pi-compaction-${compactions}`, kind: 'compact', title: 'conversation' }]
@@ -211,7 +189,6 @@ export const pi = {
       }
     }
   },
-  // pi names its model in the stream; a model line is a pattern, not a name to sign with.
   model: () => undefined,
   models: 'pi --list-models <search> finds patterns.',
 } as const satisfies Adapter

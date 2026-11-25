@@ -4,16 +4,9 @@ import { isRecord } from '../acp/json'
 import { type AcpMode, type AcpSpec, acpForget, acpMode, acpStart } from '../acp/spec'
 import type { Adapter, Mode } from '../adapter'
 
-// Read-only is the one mode via defends. Otherwise codex works in its workspace sandbox and asks before
-// going past it, as codex exec did; the question reaches the person, except in dontAsk (denied). Bypass
-// runs it with full access: there every question would be approved anyway, so the sandbox only cost a
-// round trip per escalation, or a command that failed when the model did not ask. Never codex-acp's own
-// default, auto review: its reviewer approved a network escalation itself, and nobody was asked (reproduced).
 export const CODEX: AcpSpec = {
   name: 'codex',
-  // Replaced by the installed codex-acp at each run.
   command: ['codex-acp'],
-  // The person's own Codex, not the copy codex-acp bundles.
   env: { CODEX_PATH: 'codex' },
   steer: 'steering',
   modes: {
@@ -21,10 +14,7 @@ export const CODEX: AcpSpec = {
     bypassPermissions: { agentMode: 'agent-full-access', policy: 'allow' },
     dontAsk: { agentMode: 'workspace-write', policy: 'deny' },
     default: { agentMode: 'workspace-write', policy: 'ask' },
-    // As default: workspace-write already edits the workspace without asking, as accept-edits would.
     acceptEdits: { agentMode: 'workspace-write', policy: 'ask' },
-    // As default, not codex-acp's auto review, which approved a network escalation itself (see above): a call made
-    // before agy's auto mode was taken as Claude's equal. Whether Codex's should be too is open.
     auto: { agentMode: 'workspace-write', policy: 'ask' },
   },
   thinking: 'reasoning_effort',
@@ -38,7 +28,6 @@ export const codex = {
   name: 'codex',
   bin: 'codex',
   about: "Codex CLI agent: OpenAI's models, own tools in Codex's sandbox (none in bypass mode); asks you before going past it.",
-  // The models Codex's own picker lists, best first; hidden ones are internal.
   catalogue: {
     argv: ['codex', 'debug', 'models'],
     ids: (stdout: string) => {
@@ -54,12 +43,11 @@ export const codex = {
     },
   },
   readOnly: 'enforced',
-  tools: ['read', 'write'], // write: the same as no tools line, which an agent may not think to leave out
+  tools: ['read', 'write'],
   thinking: 'offered',
   options: true,
   steer: true,
   defaultModel: false,
-  // codex-acp and its whole dependency tree, locked with integrity hashes in relay/codex-acp.
   relay: {
     install: {
       dir: 'codex-acp-2.10.0',
@@ -68,18 +56,12 @@ export const codex = {
       entry: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
     },
   },
-  // codex-acp trusts the working folder, overriding any config (hard-coded in its createSessionConfig),
-  // so codex loads a project's .codex/config.toml, whose MCP servers and hooks run outside the
-  // sandbox (reproduced: a project MCP server ran during a read-only run). A read-only run is refused
-  // under one.
   unsafeReadOnly: {
     folder: '.codex',
     harmless: [],
     own: true,
     why: "codex-acp trusts the working folder, so codex would load this project's .codex config, whose MCP servers and hooks run outside its sandbox",
   },
-  // MCP servers run outside Codex's sandbox (openai/codex#7635), so a read-only run lists them and
-  // switches each off, with plugins, in the session config codex-acp merges (CODEX_CONFIG).
   readOnlyGuard: {
     argv: ['codex', 'mcp', 'list', '--json', '--disable', 'plugins'],
     why: 'the MCP servers it would run outside its sandbox could not all be listed and switched off',
@@ -98,7 +80,6 @@ export const codex = {
   },
   start: ({ choice, prompt, session, root, inbox, files, guard, mode, installed }) => {
     const readOnly = codexMode(choice, mode).agentMode === 'read-only'
-    // Fail closed: without the guard, MCP servers would run outside the read-only sandbox.
     if (readOnly && guard === undefined) throw new Error('codex cannot prove read-only without its MCP guard')
     if (installed === undefined) throw new Error('codex-acp is not installed')
     return acpStart(CODEX, {
@@ -116,10 +97,7 @@ export const codex = {
       ...(readOnly ? { env: guard } : {}),
     })
   },
-  // Codex keeps its sessions in its own history, and its writer lock refuses a second writer, so the TUI is safe
-  // to open even while via's run holds the session.
   reopen: { argv: (session) => ['codex', 'resume', session], midRun: true },
-  // codex-acp's delete is Codex's archive (seen on 2.10.0: resuming it then says to unarchive it first).
   forget: {
     request: ({ root, session, installed }) => {
       if (installed === undefined) throw new Error('codex-acp is not installed')
@@ -128,7 +106,6 @@ export const codex = {
     note: 'Codex keeps it archived: `codex unarchive <session>` brings it back.',
   },
   events: () => relayEvents('codex'),
-  // The relay names the model the session runs on.
   model: () => undefined,
   failure: (_exit, stderr) =>
     sessionLost(stderr)

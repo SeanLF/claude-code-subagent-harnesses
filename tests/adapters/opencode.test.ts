@@ -13,8 +13,6 @@ const chunk = (messageId: string, text: string) => ({
   sessionId: SID,
   update: { content: { text, type: 'text' }, messageId, sessionUpdate: 'agent_message_chunk' },
 })
-// Captured from relay/relay.mjs over `opencode acp` (opencode 1.19.4, OpenRouter DeepSeek, 2026-10-24):
-// opencode names a tool `bash` first and its command only in the update that starts it.
 const CAPTURED = [
   { relay: 'session', sessionId: SID },
   { relay: 'model', name: 'openrouter/~deepseek/deepseek-flash-latest' },
@@ -96,7 +94,6 @@ test('only the last message is the answer, signed with the session model; a tool
   const { chunks, result, calls } = await runTurn($)
   expect(result.answer).toBe('DONE\n\n— answered by opencode, openrouter/~deepseek/deepseek-flash-latest')
   expect(result.usage?.input_tokens).toBe(11136)
-  // The command is one call to via's tool, named once, and answered with what opencode reported.
   const inputs = chunks.flatMap((c) => (c.kind === 'input' ? [JSON.parse(c.json) as unknown] : []))
   expect(inputs).toEqual([{ kind: 'execute', title: 'echo hi > asked.txt' }])
   expect(calls).toHaveLength(1)
@@ -164,7 +161,6 @@ test("a thinking line becomes opencode's effort config option", async ($, on) =>
 
 test('a call still running when the harness ends its turn is named in the answer, which stays signed', async ($, on) => {
   const spawns: Spawn[] = []
-  // The command never reports its end: opencode ended its turn without it.
   const unfinished = CAPTURED.filter((e) => !JSON.stringify(e).includes('"status":"completed"'))
   arrange(on, spawns, { stdout: lines(unfinished) })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
@@ -298,7 +294,6 @@ test("opencode's command ends the step with a call to via's tool, which the next
   expect(first.result.toolUses).toEqual([{ name: 'mcp__plugin_via_step__step', input: { kind: 'execute', title: 'echo hi > asked.txt' } }])
   const tool = first.chunks.find((c) => c.kind === 'tool')
   if (tool?.kind !== 'tool') throw new Error('no tool chunk')
-  // Each step numbers its blocks from 0.
   expect(Math.min(...first.chunks.flatMap((c) => ('index' in c ? [c.index] : [])))).toBe(0)
   const answered = await $.tool.call({
     tool: 'mcp__plugin_via_step__step',
@@ -338,7 +333,6 @@ test('a finished call reports its text, a nonzero exit code, or nothing for exit
     output: 'hi',
     failed: false,
   })
-  // Reported only once done, it is still announced first.
   expect(done('d', { kind: 'execute', title: 'ls' })[0]).toEqual({ k: 'call', id: 'd', kind: 'execute', title: 'ls' })
 })
 
@@ -354,12 +348,10 @@ test("a title's paths under the working folder are shown relative to it", () => 
     title: "Read file '/work/repo/src/a.ts'",
   }
   expect(parse(JSON.stringify({ sessionId: SID, update }))).toEqual([{ k: 'call', id: 'r', kind: 'read', title: "Read file 'src/a.ts'" }])
-  // A path that only contains the folder stays whole; so does a sibling folder's.
   const inside = { ...update, toolCallId: 'i', title: "Read file '/x/work/repo/a.ts' and '/work/repo2/b.ts'" }
   expect(parse(JSON.stringify({ sessionId: SID, update: inside }))).toEqual([
     { k: 'call', id: 'i', kind: 'read', title: "Read file '/x/work/repo/a.ts' and '/work/repo2/b.ts'" },
   ])
-  // Elsewhere, a path stays whole.
   const outside = { ...update, toolCallId: 'o', title: "Read file '/etc/hosts'" }
   expect(parse(JSON.stringify({ sessionId: SID, update: outside }))).toEqual([
     { k: 'call', id: 'o', kind: 'read', title: "Read file '/etc/hosts'" },
@@ -469,9 +461,6 @@ test('malformed tool content from an agent is skipped, not a crash', () => {
   expect(done.at(-1)).toEqual({ k: 'called', id: 'm', output: 'ok', failed: false })
 })
 
-// A harness's own subagent, as ACP's subagents RFD reports it (shape captured from codex-acp
-// 2.3.1-preview.8, 2026-10-28): the parent's step calls the Agent tool, and the nested agent it starts
-// shows the child's row and answer from the parent's run.
 const CHILD = `${SID}:subagent:c1`
 const NESTED = [
   { relay: 'session', sessionId: SID },
@@ -502,11 +491,9 @@ test("a harness's subagent is an agent nested under the via agent, with the chil
   expect(first.result.toolUses[0]?.name).toBe('Agent')
   const call = first.chunks.find((c) => c.kind === 'tool')
   const id = call?.kind === 'tool' ? call.id : ''
-  // The rest of the parent's turn: its own answer, never the child's.
   const rest = await runTurn($, { ...STEP, index: 1 })
   expect(rest.result.answer).toContain('It found steps.ts.')
   expect(rest.result.answer).not.toContain('\nsteps.ts')
-  // In the foreground the parent's step would wait on a nested agent that waits on the parent's run.
   expect(await $.agent.spawn({ ...SPAWN, tool_use_id: id, subagentType: 'via:opencode', background: false })).toEqual({
     deny: "via shows a harness's subagent only as a background agent, and background tasks are off",
   })
@@ -530,8 +517,6 @@ test('a background nested agent shows its harness subagent from the parent run',
   expect(nested.result.answer).toBe('steps.ts\n\n— answered by opencode subagent')
 })
 
-// A plan row starts a step too: an answer followed by a last plan update (all done) would leave the last
-// step, whose text Claude Code takes as the answer, with only the signature.
 test('an answer followed by a last plan update is said again in the last step', async ($, on) => {
   const spawns: Spawn[] = []
   const plan = { sessionId: SID, update: { entries: [{ content: 'Run it', status: 'completed' }], sessionUpdate: 'plan' } }

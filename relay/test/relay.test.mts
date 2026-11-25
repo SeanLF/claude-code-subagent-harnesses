@@ -1,6 +1,3 @@
-// The relay against a fake ACP agent (fake-agent.mts), run as via runs it: only PATH and what each test sets reach
-// the relay and the agent, so nothing of the person's (a RELAY_* or FAKE_* variable of theirs) changes a result.
-
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import {
@@ -34,17 +31,14 @@ import {
 
 const agent = ['node', new URL('./fake-agent.mts', import.meta.url).pathname]
 
-/** Runs the relay over the fake agent with `env` to its end. */
 const fake = (env: Record<string, string>, prompt = 'hi', cwd = sandbox().work) => runRelay({ agent, prompt, cwd, env })
 
-/** What the fake agent echoes with FAKE_ECHO: the client's capabilities and the prompt's block types. */
 type Echo = { readonly offered: ClientCapabilities; readonly blocks: readonly string[] }
 const said = async (prompt: string, cwd?: string): Promise<Echo> =>
   JSON.parse(answer((await fake({ FAKE_ECHO: '1' }, prompt, cwd)).events)) as Echo
 
 const errorOf = (events: readonly Printed[]) => relayEvent(events, 'error')?.message
 
-/** A file the fake agent writes each cancel, close, mode and config option to (FAKE_LOG). */
 const logFile = () => join(sandbox().root, 'log')
 const logged = (file: string) => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [])
 
@@ -52,6 +46,12 @@ test("an agent's error keeps the cause its data carries, not only 'Internal erro
   const run = await fake({})
   assert.equal(errorOf(run.events), "Internal error: You've hit your usage limit. Try again at 10:04 PM.")
   assert.equal(run.status, 1)
+})
+
+test("an agent's error says only its data's own words, capped at 500 characters, never the rest of its record", async () => {
+  const run = await fake({ FAKE_ERROR: 'record' })
+  assert.equal(errorOf(run.events), `Internal error: ${'d'.repeat(500)}…`)
+  assert.ok(!JSON.stringify(run.events).includes('sk-SECRET') && !run.stderr.includes('sk-SECRET'))
 })
 
 test('a refused or limit-stopped prompt is forwarded as it ended, not as a relay failure', async () => {
@@ -66,12 +66,10 @@ test('a refused or limit-stopped prompt is forwarded as it ended, not as a relay
 
 test('the relay offers streamed command output, no terminal of its own, and no plan capability', async () => {
   const { offered } = await said('hi')
-  // With one, codex-acp sends a markdown plan as plan_update, which via does not draw, in place of text.
   assert.equal(get(offered, 'plan'), undefined)
   assert.equal(get(offered, '_meta', 'terminal_output_delta'), true)
   assert.equal(offered.terminal, false)
   assert.deepEqual(get(offered, 'session', 'notices'), {})
-  // Questions to the person, both kinds, which Claude Code's own elicitation form shows.
   assert.deepEqual(get(offered, 'elicitation'), { form: {}, url: {} })
 })
 
@@ -87,7 +85,6 @@ test('an image under the working folder goes along to an agent that takes images
 })
 
 test('an image path that is not a regular file, such as a named pipe, stays text and never stalls the prompt', async () => {
-  // A size check then a read are two opens: a pipe passes the first (size 0) and blocks the second for a writer.
   const dir = sandbox().work
   execFileSync('mkfifo', [join(dir, 'pipe.png')])
   writeFileSync(join(dir, 'shot.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
@@ -107,7 +104,6 @@ test('with RELAY_TRACE the relay appends the prompt and every line it prints to 
     run.events,
   )
   assert.ok(lines.every((line) => !Number.isNaN(Date.parse(line.t))))
-  // What the agent read and ran: the owner's alone.
   assert.equal(statSync(trace).mode & 0o777, 0o600)
 })
 
@@ -118,14 +114,12 @@ test('without RELAY_TRACE the relay writes no trace', async () => {
 })
 
 test('a symlink or .. that leads out of the working folder stays text, and at most four images go along', async () => {
-  // Real paths (macOS's temp folder is itself a symlink), so only the link or the .. decides.
   const dir = realpathSync(sandbox().work)
   const outside = realpathSync(sandbox().work)
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47])
   writeFileSync(join(outside, 'secret.png'), png)
   symlinkSync(join(outside, 'secret.png'), join(dir, 'link.png'))
   mkdirSync(join(dir, 'sub'))
-  // Written out, not joined: join would resolve the .. before the relay sees it.
   const outOfRoots = `${dir}/sub/../../../${outside.split('/').slice(-2).join('/')}/secret.png`
   assert.deepEqual((await said(`See ${join(dir, 'link.png')} and ${outOfRoots}`, dir)).blocks, ['text'])
   const many = [1, 2, 3, 4, 5].map((n) => {
@@ -143,7 +137,6 @@ test('a new session is named RELAY_TITLE when the agent can retitle one; a resum
   const resumed = logFile()
   await fake({ FAKE_ECHO: '1', FAKE_TITLE: '1', FAKE_LOG: resumed, RELAY_TITLE: 'Review the parser', RELAY_SESSION: 's1' })
   assert.equal(existsSync(resumed) && readFileSync(resumed, 'utf8').includes('title'), false)
-  // Without the capability the relay never asks (the fake still logs a title it is sent, to show one if it were).
   const unable = logFile()
   assert.equal((await fake({ FAKE_ECHO: '1', FAKE_LOG: unable, RELAY_TITLE: 'Review the parser' })).status, 0)
   assert.equal(
@@ -167,11 +160,9 @@ test('a run that ends closes its session when the agent can close one, and only 
   }
 })
 
-// The agent keeps its turn past the cancel, so the run never reaches its own end: the close is the stop's.
 test('a stopped run cancels the turn, then closes the session, before the kill', async () => {
   const log = logFile()
   const run = startRelay({ agent, prompt: 'hi', cwd: sandbox().work, env: { FAKE_CLOSE: '1', FAKE_HANG: 'stubborn', FAKE_LOG: log } })
-  // The agent says when it holds the prompt.
   await run.until((line) => answer([line]) === 'holding')
   run.stop()
   await run.exited
@@ -179,7 +170,6 @@ test('a stopped run cancels the turn, then closes the session, before the kill',
   assert.equal(relayEvent(run.events, 'done'), undefined)
 })
 
-// Codex keeps a cancelled turn's commands as background terminals until its session closes.
 test("an interrupt closes the session, which stops the step's commands, and reopens it for its message", async () => {
   const b = sandbox()
   const log = logFile()
@@ -195,13 +185,11 @@ test("an interrupt closes the session, which stops the step's commands, and reop
   await run.until((line) => answer([line]) === 'holding')
   send(b.inbox, { interrupt: 'stop' })
   assert.equal(await run.exited, 0, run.stderr)
-  // The mode is set again on the reopened session, which starts from the agent's defaults; the run's end closes it too.
   const mode = 'mode workspace-write'
   assert.deepEqual(logged(log), [mode, 'prompt', 'cancel', 'close', 'resume', mode, 'prompt', 'close'])
   assert.deepEqual(relayEventsNamed(run.events, 'interrupted').length, 1)
 })
 
-// Without resume the session stays open across the interrupt, as before.
 test('an interrupt leaves the session open for an agent that cannot resume one', async () => {
   const b = sandbox()
   const log = logFile()
@@ -217,7 +205,6 @@ test('an interrupt leaves the session open for an agent that cannot resume one',
   assert.deepEqual(logged(log), ['prompt', 'cancel', 'prompt', 'close'])
 })
 
-/** A run with the fake agent offering config options, and what it ended with and set. */
 const configured = async (env: Record<string, string>) => {
   const log = logFile()
   const run = await fake({ FAKE_ECHO: '1', FAKE_OPTIONS: '1', FAKE_LOG: log, ...env })
@@ -298,7 +285,6 @@ test("a refused model, mode or config option keeps the agent's reason, not only 
   )
 })
 
-// via saves the session the relay names: one named before a refusal would be resumed with no prompt in it.
 test('a run that fails setting up its new session names no session to save; one set up names it before its prompt', async () => {
   const refused: Record<string, string>[] = [
     { RELAY_MODEL: 'gpt-6.1-sol' },
@@ -340,7 +326,6 @@ test('with RELAY_POLICY=ask and no inbox no answer can come back, so the request
   assert.equal(answer((await fake({ FAKE_ASK: '1', RELAY_POLICY: 'ask' })).events), 'chose reject_once')
 })
 
-/** A run whose agent asks the person one question (FAKE_QUESTION): the question the relay printed, and the run. */
 const questioned = async (kind: 'form' | 'url') => {
   const b = sandbox()
   const run = startRelay({ agent, prompt: 'hi', cwd: b.work, env: { FAKE_QUESTION: kind, RELAY_INBOX: b.inbox } })
@@ -395,7 +380,6 @@ test('an inbox line that is no JSON, or no inbox line, is skipped and said on st
   send(b.inbox, { question: asked.id, answer: { action: 'decline' } })
   assert.equal(await run.exited, 0, run.stderr)
   assert.equal(answer(run.events), 'got {"action":"decline"}')
-  // An interrupt whose text is no string is not taken.
   assert.equal(relayEvent(run.events, 'interrupted'), undefined)
   assert.deepEqual(
     run.stderr.split('\n').filter((line) => line.includes('inbox line')),
@@ -419,14 +403,12 @@ test('an interrupt cancels a question still open', async () => {
   const run = startRelay({ agent, prompt: 'hi', cwd: b.work, env: { FAKE_QUESTION: 'form', RELAY_INBOX: b.inbox } })
   await run.until((line) => relayEvent([line], 'question') !== undefined)
   send(b.inbox, { interrupt: 'stop' })
-  // The interrupt's text runs next, and the fake asks again: answered, the run ends on its own.
   await run.until(() => relayEventsNamed(run.events, 'question').length === 2)
   const [first, second] = relayEventsNamed(run.events, 'question')
   send(b.inbox, { question: second?.id, answer: { action: 'decline' } })
   assert.equal(await run.exited, 0, run.stderr)
   assert.equal(run.stderr.includes('stopped after'), false, run.stderr)
   assert.equal(answer(run.events), 'got {"action":"cancel"}got {"action":"decline"}')
-  // Said, so the plugin stops waiting on the person for it; the answered one is not.
   assert.deepEqual(
     relayEventsNamed(run.events, 'question_closed').map((e) => e.id),
     [first?.id],
@@ -459,7 +441,6 @@ test('a question the agent withdraws is closed, said with its id, and nothing wa
   assert.equal(relayEvent(r.events, 'question_closed')?.id, asked.id)
 })
 
-/** The image block a FAKE_IMAGE run printed. */
 const imaged = async (env: Record<string, string>) => {
   const r = await fake({ FAKE_IMAGE: '1', ...env })
   assert.equal(r.status, 0, r.stderr)

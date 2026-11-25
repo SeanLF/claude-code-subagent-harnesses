@@ -1,8 +1,3 @@
-// The real `opencode acp` behind the real relay, with the model a local fake (support/fake-model.mts): no
-// tokens, no network. As OpenCode's own ACP tests (packages/cli/test/acp/subprocess.ts): an isolated home,
-// XDG folders and database, and a config whose one provider is an OpenAI-compatible one at the fake. The
-// config goes in OPENCODE_CONFIG_DIR, leaving OPENCODE_CONFIG_CONTENT to via, as its read-only mode uses it.
-// Skipped when opencode is not on PATH.
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -32,7 +27,6 @@ const skip = installed('opencode') ? false : 'opencode is not on PATH'
 let fake: FakeModel
 beforeEach(async () => {
   fake = await startFakeModel()
-  // OpenCode names each new session with a model request of its own, alongside the turn's.
   fake.aside((body) => String(body.messages?.[0]?.content).startsWith('You name conversations'), chatText('Fake title'))
 })
 afterEach(async () => {
@@ -84,7 +78,6 @@ type Box = ReturnType<typeof box>
 const opencode = (b: Box, prompt: string, env: Record<string, string> = {}) =>
   runRelay({ agent: ['opencode', 'acp'], prompt, cwd: b.work, env: { ...b.env, ...env } })
 
-/** What request `n` carried, by role. */
 const said = (n: number, role: string) =>
   (fake.requests[n]?.messages ?? []).filter((m) => m.role === role).map((m) => JSON.stringify(m.content))
 
@@ -102,7 +95,6 @@ test('a scripted answer arrives as the answer, and the run ends done', { skip },
 test('a scripted shell command arrives as a tool call with its output, and OpenCode hands the output back', { skip }, async () => {
   const b = box()
   fake.enqueue(chatToolCall('call_shell', 'shell', { command: 'echo shell-ok' }), chatText('ran it'))
-  // via's bypass mode: every question approved.
   const run = await opencode(b, 'Run echo shell-ok.', { RELAY_POLICY: 'allow' })
   assert.equal(run.status, 0, run.stderr)
   const calls = toolCalls(run.events)
@@ -127,7 +119,6 @@ test('a follow-up resumes the session, and OpenCode sends the model the earlier 
   const second = await opencode(b, 'What did you reply?', { RELAY_SESSION: sessionId })
   assert.equal(second.status, 0, second.stderr)
   assert.equal(sessionOf(second.events), sessionId)
-  // The resumed session replays its history before the new prompt's answer.
   assert.deepEqual(spoken(second.events), { replayed: 'PONG', answered: 'You said PONG.' })
   assert.match(said(1, 'user').join(), /Reply with only the word PONG\./)
   assert.match(said(1, 'assistant').join(), /PONG/)
@@ -155,28 +146,22 @@ test('an interrupt cancels the turn and runs its text next, in the same session'
   assert.match(JSON.stringify(fake.requests.at(-1)?.messages), /Stop\. Reply with only the word REDIRECTED\./)
 })
 
-/** Starts a run whose model asks for a long `sleep`, and resolves once the sleep runs, with its pid. */
 async function sleepingRun(b: Box, seconds: number, env: Record<string, string>) {
   const pidFile = join(b.work, 'sleep.pid')
   fake.enqueue(chatToolCall('call_sleep', 'shell', { command: sleeping(seconds, pidFile) }), chatText('REDIRECTED'))
   const run = startRelay({ agent: ['opencode', 'acp'], prompt: 'Sleep.', cwd: b.work, env: { ...b.env, RELAY_POLICY: 'allow', ...env } })
-  // The command says when its sleep runs.
   await created(pidFile, run.exited)
   const pid = Number(readFileSync(pidFile, 'utf8'))
   assert.equal(alive(pid), true)
   return { run, pid }
 }
 
-// OpenCode runs commands in their own process group, so a group kill once left a `sleep` running. OpenCode
-// 2.2.7 ends the command on SIGTERM itself (with the relay's cancel and close removed, no `sleep` is left), so
-// what this guards today is that the stop's cancel or close ends the turn.
 test('a stopped run ends its running shell command, leaving no process behind', { skip }, async () => {
   const b = box()
   const { run, pid } = await sleepingRun(b, 61.3, {})
   run.stop()
   await run.exited
   assert.equal(alive(pid), false)
-  // The stop's cancel ends OpenCode's turn, which the relay reports as it ended.
   assert.equal(relayEvent(run.events, 'prompt_done')?.stopReason, 'cancelled')
 })
 

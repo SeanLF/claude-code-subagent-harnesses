@@ -7,7 +7,7 @@
     "test": "claude plugin test . < /dev/null",
     "validate": "claude plugin validate --strict . < /dev/null",
     "build:relay": "esbuild relay/src/relay.mts --bundle --platform=node --format=esm --target=node22 --legal-comments=inline --outfile=relay/relay.mjs --banner:js='// Built from relay/src/relay.mts by pnpm build:relay; do not edit.'",
-    "lint": "biome ci .",
+    "lint": "biome ci . && node checks/comments.mts",
     "format": "biome check --write .",
     "test:relay": "node --test 'relay/test/**/*.test.mts'",
     "check:relay": "node relay/checks/check.mts",
@@ -21,6 +21,7 @@
     "@earendil-works/pi-coding-agent": "1.6.0",
     "@types/node": "26.6.6",
     "esbuild": "0.28.2",
+    "oxc-parser": "0.160.0",
     "typescript": "7.0.2",
     "zod": "4.6.7"
   }

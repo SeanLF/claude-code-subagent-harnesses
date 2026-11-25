@@ -14,7 +14,6 @@ import { answerQuestion, awayWait, sendMessage, showQuestions, steer, typed } fr
 import { adapterOf, turnStep } from './turn'
 import type { World } from './world'
 
-// Only harnesses installed at session start get an agent type: each description rides on every request.
 async function onPath($: Pick<EngineInterface, 'env' | 'fs'>, bin: string): Promise<boolean> {
   const path = (await $.env.get('PATH')) ?? ''
   const dirs = path.split(path.includes(';') ? ';' : ':').filter(Boolean)
@@ -31,12 +30,6 @@ async function onPath($: Pick<EngineInterface, 'env' | 'fs'>, bin: string): Prom
   return found.includes(true)
 }
 
-// A teammate's messages arrive wrapped (<teammate-message teammate_id=… summary=…>task</teammate-message>):
-// the harness gets the task alone, so its prompt lines (model:, tools:) are read from its top.
-// Only a message that is nothing but envelopes is unwrapped. One linear pass: an attribute may hold a
-// quoted >, and a message full of unclosed openers must not cost quadratic time.
-// A SendMessage to a via agent that has answered resumes it with the message wrapped, so a slash
-// command or a prompt line in it would not be at the top: codex-acp runs /compact only there.
 const SENT = 'The coordinator sent a message while you were working:\n'
 const ADDRESS = '\n\nAddress this before completing your current task.'
 function fromCoordinator(text: string): string | undefined {
@@ -54,7 +47,6 @@ export function unwrapped(text: string): string {
     while (at < text.length && /\s/.test(text[at] as string)) at += 1
     if (at === text.length) break
     if (!text.startsWith(OPEN, at) || !/[\s>]/.test(text[at + OPEN.length] ?? '')) return text
-    // The opening tag ends at the first > outside quotes.
     let quote = ''
     let end = at + OPEN.length
     for (; end < text.length; end += 1) {
@@ -76,20 +68,13 @@ export function unwrapped(text: string): string {
   return inner.length > 0 ? inner.join('\n\n') : text
 }
 
-// The tool of the server plugin.json declares as `step`, named as Claude Code names a plugin's server.
 const STEP = 'mcp__plugin_via_step__step'
-// The agents tool, as Claude Code names a tool a plugin registers: mcp__<plugin>__<name>.
 const AGENTS = 'mcp__via__agents'
 
 const CLAUDE = /claude|opus|sonnet|haiku|fable/i
 const KEPT = 4
 const DROPPED = "Earlier steps of this run were dropped from Claude Code's copy; the harness still has them."
 
-// Claude Code reads a via agent's usage as its own context and refuses a step past the window, 200k for
-// a model it does not know. This variable sizes only such models; with a gateway model on the main loop
-// it would size that too, so via sets it only while Claude is the main model, and never over the
-// person's own value. via's value is told apart by being exactly RAISED, so a reload or a /model
-// switch undoes only via's. The process's children inherit it, as any variable.
 const RAISED = String(1e9)
 async function sizeWindow($: Pick<EngineInterface, 'env'>, main: string): Promise<void> {
   const now = await $.env.get('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
@@ -99,20 +84,15 @@ async function sizeWindow($: Pick<EngineInterface, 'env'>, main: string): Promis
   } else if (now === RAISED) await $.env.set('CLAUDE_CODE_MAX_CONTEXT_TOKENS', undefined)
 }
 
-// What the run will ask for, as turn.ts chooses it; the harness's own default is unknown until it answers.
 function choiceOf(world: World, adapter: Adapter, prompt: string): { model?: string; thinking?: string } {
   const asked = promptOf(unwrapped(prompt), adapter)
   const fallback = adapter.defaultModel && isModel(world.defaultModel) ? world.defaultModel : undefined
   return { model: asked.model ?? fallback, thinking: asked.thinking }
 }
 
-// The permission mode's own ask, for its decider (auto mode's classifier): not a rule's, a setting's, a hook's or a plugin's.
 const modeAsks = (v: { decision: string; rule?: string; hook?: string; setting?: string; plugin?: string }) =>
   v.decision === 'ask' && !v.rule && !v.hook && !v.setting && !v.plugin
 
-// Auto mode asks a local agent to end with a SubagentHandback; the engine's reminder is not in
-// session.messages, so the spawn's terms are kept. A remote spawn has no field here (isolation is on
-// AgentSpec, not AgentSpawnInput), and background cannot tell it from any other background spawn.
 function handsBack(e: { permissionMode?: string; isTeammate?: boolean; workflow?: unknown; fork?: boolean }): boolean {
   return e.permissionMode === 'auto' && !e.isTeammate && e.workflow === undefined && !e.fork
 }
@@ -122,7 +102,6 @@ export const register: Register = (on, options) => {
   const world: World = {
     adapters: new Map<string, Adapter>(HARNESSES.map((adapter) => [adapter.name, adapter])),
     defaultModel: typeof options.defaultModel === 'string' ? options.defaultModel.trim() : '',
-    // The codexAcp setting: codex-acp's newest, rather than the version via pins.
     latest: new Set(options.codexAcp === 'latest' ? ['codex'] : []),
     timeoutMinutes: typeof asked === 'number' && Number.isFinite(asked) && asked > 0 ? asked : 30,
     turns: new Map(),
@@ -141,11 +120,9 @@ export const register: Register = (on, options) => {
     handed: new Map(),
     asking: new Map(),
     asked: 0,
-    // Until the session says otherwise: a session that never starts here has no -p to tell.
     interactive: true,
     background: new Set(),
   }
-  // The engine's bounded wait for a run's next chunk (see waitStep). A noun, so the wait is not charged to the hook.
   on('engine.create', async (_, e, next) => {
     const built = await next(e)
     return {
@@ -165,15 +142,10 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     world.interactive = e.isInteractive
-    // Best effort: a hook that throws is skipped whole, and the agents below must still register.
     await $.session
       .model()
       .then((main) => sizeWindow($, main))
       .catch(() => undefined)
-    // Each harness tool call reaches Claude Code as a call to this tool, served by mcp/step.mts, which
-    // runs nothing: its tool.call hook answers with what the harness reported. Bash would look the same,
-    // but a hook that fails is skipped and the real command would run; a call nobody answers fails.
-    // One tool for via's agents on record: list, open, forget. Deferred, so it costs a request nothing until wanted.
     await $.tool
       .register({ ...AGENTS_SPEC, isDeferred: true })
       .catch((error: unknown) => $.ui.log(`via could not add its agents tool: ${String(error)}`))
@@ -185,8 +157,6 @@ export const register: Register = (on, options) => {
         name: adapter.name,
         description: descriptionOf(adapter, models),
         prompt: notActivePrompt(adapter.name),
-        // Agent: a harness's own subagents show as agents nested under this one (hooks/acp/children.ts).
-        // SendMessage: a harness's question handed to the main agent.
         tools: [world.tool, 'Agent', 'SendMessage'],
         model: adapter.name,
       })
@@ -194,40 +164,27 @@ export const register: Register = (on, options) => {
     return started
   })
 
-  // A via agent's own Agent call, for its harness's subagent: approved here, since auto mode's classifier
-  // judges only calls a model's request made, and via makes this one up.
-  // Only the mode's own ask is settled here: a deny, or an ask from a rule, a setting, a hook or another
-  // plugin, still stands.
   on('tool.check', { tool: 'Agent' }, async (_, e, next) => {
     const verdict = await next(e)
     const own = e.agentId !== undefined && world.records.has(e.agentId) && e.tool_use_id?.startsWith(CHILD_CALL)
     return own && modeAsks(verdict) ? { decision: 'allow', reason: "via's own call for its harness's subagent" } : verdict
   })
-  // A step call that asks the person, made up by via like the Agent call above, and settled the same way: it
-  // only puts the harness's question to the person, who answers or declines it in Claude Code's form.
-  // Known by its id and input, as the check doesn't see the step's calls in flight (seen live 2026-11-16).
   on('tool.check', { tool: STEP as 'Bash' }, async (_, e, next) => {
     const verdict = await next(e)
     const own = e.tool_use_id?.startsWith(STEP_CALL) === true && (e.input as { kind?: unknown } | undefined)?.kind === 'question'
     return own && modeAsks(verdict) ? { decision: 'allow', reason: "via's own call, asking you the harness's question" } : verdict
   })
-  // A via agent's own SendMessage, handing its harness's question to the main agent, settled the same way.
   on('tool.check', { tool: 'SendMessage' }, async (_, e, next) => {
     const verdict = await next(e)
     const own = e.agentId !== undefined && world.records.has(e.agentId) && e.tool_use_id?.startsWith(SEND_CALL) === true
     return own && modeAsks(verdict) ? { decision: 'allow', reason: "via's own call, handing its harness's question to you" } : verdict
   })
 
-  // Typed into a via agent's view while it runs: Claude Code delivers it at the agent's next step, as an
-  // attachment no model reads. A harness that takes steers reads it at its own next step instead.
-  // Only what the person typed (here, or from their phone): a notification, a peer's or a channel's
-  // message rides the same attachment and is not theirs to steer with.
   on('session.append', async ($, e, next) => {
     const inbox = e.agentId === undefined ? undefined : world.inboxes.get(e.agentId)
     const theirs = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
     if (inbox !== undefined && theirs && e.message.type === 'attachment' && e.message.name === 'queued_command') {
       const message = typed(e.message.content)
-      // A failed write loses the message: said, though the row is kept either way.
       if (message)
         await steer($, inbox, message).catch((err: unknown) => $.ui.log(`via could not pass your message to ${inbox.name}: ${String(err)}`))
     }
@@ -237,11 +194,9 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     const [plugin, name = ''] = (e.subagentType ?? '').split(':')
     const adapter = plugin === $.plugin.name ? world.adapters.get(name) : undefined
-    // A harness's subagent, which via shows from its parent's run: no harness of its own to choose.
     const key = adapter && e.tool_use_id.startsWith(CHILD_CALL) ? world.spawns.get(e.tool_use_id) : undefined
     if (adapter && key !== undefined) {
       world.spawns.delete(e.tool_use_id)
-      // In the foreground the parent's step would wait on a nested agent that waits on the parent's run.
       if (!e.background) {
         const channel = world.channels.get(key)
         if (channel) channel.read = true
@@ -262,9 +217,6 @@ export const register: Register = (on, options) => {
       }
       return started
     }
-    // No request reaches Claude: the agent's model is the harness's, which Claude Code stamps on every
-    // response via makes up. Claude Code takes gateway model ids. The task shows what was asked for.
-    // A resume keeps what its agent started with; a workflow agent's description is the script's.
     const choice = adapter && !e.resume ? choiceOf(world, adapter, e.prompt) : undefined
     const shown = choice && !e.workflow ? [choice.model, choice.thinking].filter(Boolean).join(' · ') : ''
     const started = await next(
@@ -276,11 +228,6 @@ export const register: Register = (on, options) => {
       world.seeds.set(started.agentId, e.prompt)
       if (e.background) world.background.add(started.agentId)
       else world.background.delete(started.agentId)
-      // agent.list may lag the first step, so the harness is learned at the spawn. mode: what the person
-      // allows Claude itself, which a harness maps to its own modes.
-      // A resume, or a teammate brought back, is the same agent: its session, choice and answer stay, and only
-      // the spawn's terms are new.
-      // cwd: where its harness runs and keeps the session, which the agents tool opens it in; a resume keeps the first.
       const terms = { harness: adapter.name, handback: handsBack(e), mode: e.permissionMode ?? 'default' }
       const cwd = await $.session.cwd().catch(() => undefined)
       const kept = await recordOf(world, $, started.agentId)
@@ -305,19 +252,14 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // No model reads a via agent's conversation, only the screen, and the harness keeps its own context.
-  // Claude Code still refuses a step once the conversation passes its window, and its summarizer cannot
-  // run on the harness's model: so via drops the old rows itself. Skipping would leave the step refused.
   on('session.compact', async ($, e, next) => {
     if (e.agentId === undefined || !(await adapterOf(world, $, e.agentId))) return next(e)
     if (e.trigger === 'precompute') return { skip: 'via compacts without a summary.' }
-    // From an assistant message, so no tool result is kept without its call.
     const from = e.messages.findIndex((m, i) => i >= e.messages.length - KEPT && m.role === 'assistant')
     const note = { role: 'user' as const, text: DROPPED, toolUses: [] }
     return { messages: from === -1 ? [note] : [note, ...e.messages.slice(from)] }
   })
 
-  // A /model switch to a gateway model must not keep a window sized for via's agents.
   on('classic.PostModelSwitch', async ($, e, next) => {
     const done = await next(e)
     await sizeWindow($, e.to_model).catch(() => undefined)
@@ -333,9 +275,6 @@ export const register: Register = (on, options) => {
   if (HARNESSES.some((adapter) => adapter.steer))
     on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => sendMessage(world, $, e, next))
 
-  // The matcher's type names only built-in tools; an MCP tool's full name is accepted at run time.
-  // A step call that asks the person asks in Claude Code's AskUserQuestion dialog, or goes through to the step
-  // server, which asks in Claude Code's MCP form.
   on('tool.call', { tool: STEP as 'Bash' }, ($, e, next) =>
     e.tool_use_id !== undefined && world.calls.get(e.tool_use_id)?.question
       ? answerQuestion($, world, e.tool_use_id, (e as { question?: unknown }).question, (question) => next({ ...e, question } as typeof e))
@@ -343,14 +282,10 @@ export const register: Register = (on, options) => {
   ).catch(() => ({
     deny: 'via could not report this harness tool call.',
   }))
-  // The tool registered at session.start.
   on('tool.call', { tool: AGENTS as 'Bash' }, ($, e) => agentsCall($, world, e as { action?: unknown; agent?: unknown }))
-  // The dialog answerQuestion opens shows the harness's questions.
   on('tool.call', { tool: 'AskUserQuestion' }, ($, e, next) => showQuestions(world, $, e, next))
 
   on('ui.render', { component: 'ToolUse' }, (_, e, next) => (e.props.tool === world.tool ? drawCall(e.props) : next(e)))
-  // Claude Code decides which calls fold; via only counts them, and only a run of its own calls alone.
-  // By its first call's id: the groups that showed another row (a hook timing, a recalled memory), which stays.
   const others = new Set<string>()
   on('ui.render', { component: 'ToolGroup' }, (_, e, next) => {
     const { calls, isCallsOnly, isExpanded } = e.props
@@ -358,23 +293,14 @@ export const register: Register = (on, options) => {
     const failed = calls.some((call) => call.isErrored || call.isInterrupted)
     const group = calls[0]?.tool_use_id
     if (ours && isCallsOnly === false && !failed && group !== undefined) others.add(group)
-    // A failed or interrupted call also clears isCallsOnly: its group keeps via's line, not the engine's, so a group
-    // keeps one drawer for its life. A group that showed another row keeps the engine's from then on. The props
-    // can't tell "failed" from "failed, with another row", so a row that joins with or after a failure, in a group
-    // via draws, is hidden (tests/group-rules.test.ts): what a ToolGroup hook can't avoid while it draws the whole
-    // group, rather than only its summary.
     const plain = isCallsOnly === true || (failed && !(group !== undefined && others.has(group)))
     return !isExpanded && ours && plain ? drawGroup(e.props) : next(e)
   })
-  // The row shows the output already, all of it when expanded.
   on('ui.render', { component: 'ToolResult' }, (_, e, next) => (e.props.tool === world.tool ? { type: 'Box', children: [] } : next(e)))
 
   on('turn.step', async function* ($, e, next) {
     return yield* turnStep(world, $, e, next)
   }).catch(async function* ($, e, next) {
-    // A via step that throws would otherwise be skipped, and the request would go to the model with the
-    // harness's model id. End the via turn with an explicit failure instead.
-    // From memory: turnStep's adapterOf loaded the record before anything that can throw.
     const agentId = e.agentId
     const record = agentId === undefined ? undefined : world.records.get(agentId)
     const adapter = record === undefined ? undefined : world.adapters.get(record.harness)
@@ -383,8 +309,6 @@ export const register: Register = (on, options) => {
     $.ui.log(`via's step for ${adapter.name} failed (${why})`)
     endJob(world, agentId)
     const report = `The ${adapter.name}${record.nested ? ' subagent' : ''} failed: via could not render its next step.`
-    // A nested agent's later steps, here or in a new process, answer this rather than the cut-off; an answer it
-    // already has is kept.
     if (record.nested && !record.report) await updateRecord(world, $, agentId, { report })
     return yield* respond(e, textChunks(report), report)
   })

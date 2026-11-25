@@ -1,7 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { createRecord, type Records, recordOf, updateRecord } from '../hooks/record'
 
-// The two nouns a record touches; the rest of the engine is never reached.
 type Engine = Parameters<typeof createRecord>[1]
 
 function memory() {
@@ -63,7 +62,6 @@ test('a store that refuses leaves the record in memory, and the step goes on', a
   await createRecord(w, $, 'a1', { harness: 'pi', handback: false, mode: 'default' })
   expect(await recordOf(w, $, 'a1')).toMatchObject({ harness: 'pi' })
   expect(await recordOf(w, $, 'a2')).toBeUndefined()
-  // Said once, however many reads and writes fail.
   expect(logged).toHaveLength(1)
   expect(logged[0]).toContain('runs read-only, without its last answer')
 })
