@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0](https://github.com/SeanLF/via-claude-code/compare/via-v0.11.0...via-v1.0.0) (2026-11-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **via:** an install from the old marketplace, via@claude-code-subagent-harnesses, gets no more updates. Move it: claude plugin uninstall via@claude-code-subagent-harnesses, claude plugin marketplace remove claude-code-subagent-harnesses, then claude plugin install via --marketplace SeanLF/via-claude-code, and set via's settings in /config again. Agents started before the move can't be continued after it.
+
+### Features
+
+* **via:** an agents tool lists via's agents, opens one in its harness, or forgets it ([f4d2efb](https://github.com/SeanLF/via-claude-code/commit/f4d2efbf7629ff7bdcca545c5b70ff8949523258))
+* **via:** each Claude Code permission mode means the same for every harness ([48c3601](https://github.com/SeanLF/via-claude-code/commit/48c36011311ab56282c491280f93e97478c4eb5c))
+
+
+### Bug Fixes
+
+* **via:** the repository and its marketplace are named via-claude-code ([f6251fb](https://github.com/SeanLF/via-claude-code/commit/f6251fb2f6f8d7db47052dec9ddb972558429ee5))
+
 ## [0.11.0](https://github.com/SeanLF/claude-code-subagent-harnesses/compare/via-v0.10.0...via-v0.11.0) (2026-11-24)
 
 
