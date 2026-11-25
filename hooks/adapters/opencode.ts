@@ -31,7 +31,16 @@ export const OPENCODE: AcpSpec = {
   name: 'opencode',
   command: ['opencode', 'acp'],
   steer: 'prompt',
-  modes: { readOnly: { policy: 'deny' }, bypassPermissions: { policy: 'allow' }, dontAsk: { policy: 'deny' }, default: { policy: 'ask' } },
+  modes: {
+    readOnly: { policy: 'deny' },
+    bypassPermissions: { policy: 'allow' },
+    dontAsk: { policy: 'deny' },
+    default: { policy: 'ask' },
+    // As default: opencode has no mode of its own for these; the person's own permission config decides what
+    // it asks, and the relay answers a question whole, not by the kind of tool behind it.
+    acceptEdits: { policy: 'ask' },
+    auto: { policy: 'ask' },
+  },
   // A model with variants offers opencode's `effort` config option.
   thinking: 'effort',
 }

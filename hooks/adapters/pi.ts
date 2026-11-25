@@ -79,6 +79,8 @@ function outputOf(tool: string, args: Record<string, unknown>, result: unknown, 
   return tool === 'bash' ? tail(output, 2000) : cap(output, 2000)
 }
 
+// pi has no permission modes, so Claude Code's map to nothing closer: plan mode, like tools: read, gives it reading
+// tools only (turn.ts); every other mode runs pi's own tools, which never ask (AcpModes, hooks/acp/spec.ts).
 export const pi = {
   name: 'pi',
   bin: 'pi',

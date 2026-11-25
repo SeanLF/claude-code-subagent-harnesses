@@ -355,7 +355,7 @@ test('forget deletes nothing when the session changes, or a run starts, while th
 
 test(
   "a pi agent's mark is held by its own timeoutMinutes, and an interrupt's run holds it again from then",
-  { options: { timeoutMinutes: 120 } },
+  { options: { timeoutMinutes: 2 } },
   async ($, on) => {
     const clock = mock.clock(on)
     mock.env(on, ENV)
@@ -398,11 +398,12 @@ test(
     await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
     const pending = run($)
     await clock.settle()
-    await clock.advance(100 * MINUTE)
+    // Short: the mock clock fires each 5-second step wait on the way, so long advances cost real time.
+    await clock.advance(MINUTE)
     await $.tool.call({ tool: 'SendMessage', to: 'a1', message: 'interrupt: now do C', tool_use_id: 'i' })
     await pending
-    // The first run until 121 minutes; the interrupt's, started at 100, until 221.
-    expect(marks).toEqual([121 * MINUTE, 221 * MINUTE])
+    // The first run until 3 minutes (its 2, and a minute's grace); the interrupt's, started at 1, until 4.
+    expect(marks).toEqual([3 * MINUTE, 4 * MINUTE])
     expect(store.record('a1')?.runningUntil).toBeUndefined()
   },
 )

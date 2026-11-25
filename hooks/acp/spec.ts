@@ -37,15 +37,22 @@ function relayEnv(c: {
 
 // What Claude Code's permission mode, or a read-only run, sets on the agent: its own mode, if it has
 // one, and how the relay answers its permission requests.
-export type AcpMode = { readonly agentMode?: string; readonly policy: Policy }
+// command: the agent as this mode starts it, in place of the spec's (agy leaves its sandbox out in bypass). A run's
+// own command (an installed entry point) wins over it, so an adapter that passes one carries its sandbox flags itself.
+export type AcpMode = { readonly agentMode?: string; readonly policy: Policy; readonly command?: readonly string[] }
+
+// Each Claude Code permission mode means the same for every harness, in the harness's nearest terms: never more
+// than the person gave Claude, and no less unless the harness has nothing closer. So the table names every mode,
+// and a missing one is a type error; a row the same as default says why in a comment. readOnly: plan mode or a
+// read-only run.
+export type AcpModes = { readonly readOnly: AcpMode } & { readonly [M in Exclude<Mode, 'plan'>]: AcpMode }
 
 export type AcpSpec = {
   readonly name: string
   readonly command: readonly string[] // the ACP agent, as the relay starts it
   readonly env?: Readonly<Record<string, string>>
   readonly steer: 'steering' | 'prompt' // how a message reaches a running prompt: the relay's RELAY_STEER
-  // readOnly: plan mode or a read-only run; the rest by Claude Code's permission mode.
-  readonly modes: { readonly readOnly: AcpMode; readonly bypassPermissions: AcpMode; readonly dontAsk: AcpMode; readonly default: AcpMode }
+  readonly modes: AcpModes
   readonly thinking?: string // the config option a thinking level sets
 }
 
@@ -67,11 +74,10 @@ export type AcpRun = {
   readonly options?: Readonly<Record<string, string>> // the person's config lines
 }
 
+// A mode Claude Code adds later, which no table names yet, runs as default: asked, never granted more.
 export function acpMode(spec: AcpSpec, readOnly: boolean, mode: Mode): AcpMode {
   if (readOnly || mode === 'plan') return spec.modes.readOnly
-  if (mode === 'bypassPermissions') return spec.modes.bypassPermissions
-  if (mode === 'dontAsk') return spec.modes.dontAsk
-  return spec.modes.default
+  return (spec.modes as Partial<Record<string, AcpMode>>)[mode] ?? spec.modes.default
 }
 
 // The relay's RELAY_DELETE for one session of the agent: no session opened, no prompt.
@@ -83,10 +89,10 @@ export function acpForget(
 }
 
 export function acpStart(spec: AcpSpec, run: AcpRun): ProcessSpawnRequest {
-  const { agentMode, policy } = acpMode(spec, run.readOnly, run.mode)
+  const { agentMode, policy, command } = acpMode(spec, run.readOnly, run.mode)
   const config = { ...(run.config ?? {}), ...(run.thinking && spec.thinking ? { [spec.thinking]: run.thinking } : {}) }
   return {
-    argv: relayArgv(run.root, run.command ?? spec.command),
+    argv: relayArgv(run.root, run.command ?? command ?? spec.command),
     env: {
       ...relayEnv({
         inbox: run.inbox,

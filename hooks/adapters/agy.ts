@@ -11,10 +11,23 @@ import type { Adapter, Norm } from '../adapter'
 export const AGY: AcpSpec = {
   name: 'agy',
   // --sandbox confines the commands agy runs (credentials such as ~/.kube are refused by the OS, tested
-  // live); it does not stop agy's own file edits.
+  // live); it does not stop agy's own file edits, nor a command that writes outside the working folder (1.5.16). Bypass runs
+  // without it, as Codex runs with full access there.
   command: ['agy', 'acp', '--sandbox'],
   steer: 'prompt',
-  modes: { readOnly: { policy: 'deny' }, bypassPermissions: { policy: 'allow' }, dontAsk: { policy: 'deny' }, default: { policy: 'ask' } },
+  modes: {
+    readOnly: { policy: 'deny' },
+    // Without --sandbox: every request is approved here anyway, so it would only refuse a command the person
+    // allowed, such as kubectl reading ~/.kube (tested live on 1.5.16). Not --dangerously-skip-permissions, which
+    // approves requests as the relay's allow policy does, and keeps the sandbox. From imwower's fork (b4c6fff).
+    bypassPermissions: { policy: 'allow', command: ['agy', 'acp'] },
+    dontAsk: { policy: 'deny' },
+    default: { policy: 'ask' },
+    // agy's own modes of the same names (tested live on 1.5.16, every question denied): accept-edits made the edit
+    // and ran no command; auto did both under request-review, and neither under strict, which it honours.
+    acceptEdits: { agentMode: 'accept-edits', policy: 'ask' },
+    auto: { agentMode: 'auto', policy: 'ask' },
+  },
   thinking: 'thought_level',
 }
 
@@ -27,7 +40,7 @@ export const agy = {
   name: 'agy',
   bin: 'agy',
   about:
-    'Antigravity CLI agent: Gemini, Claude and GPT-OSS models through a Google account, own tools (edits files, runs sandboxed commands; no read-only mode).',
+    'Antigravity CLI agent: Gemini, Claude and GPT-OSS models through a Google account, own tools (edits files, runs commands in its sandbox, none in bypass mode; no read-only mode).',
   // One `id<TAB>name` per line; agy says it is fetching on stderr. Its session takes these ids too: a
   // Gemini one with an effort suffix (gemini-3.8-flash-low) sets the model and its thought_level.
   catalogue: { argv: ['agy', 'models'], ids: (stdout: string) => stdout.split('\n').map((line) => line.split('\t')[0]?.trim() ?? '') },

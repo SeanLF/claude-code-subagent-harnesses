@@ -21,6 +21,11 @@ export const CODEX: AcpSpec = {
     bypassPermissions: { agentMode: 'agent-full-access', policy: 'allow' },
     dontAsk: { agentMode: 'workspace-write', policy: 'deny' },
     default: { agentMode: 'workspace-write', policy: 'ask' },
+    // As default: workspace-write already edits the workspace without asking, as accept-edits would.
+    acceptEdits: { agentMode: 'workspace-write', policy: 'ask' },
+    // As default, not codex-acp's auto review, which approved a network escalation itself (see above): a call made
+    // before agy's auto mode was taken as Claude's equal. Whether Codex's should be too is open.
+    auto: { agentMode: 'workspace-write', policy: 'ask' },
   },
   thinking: 'reasoning_effort',
 }

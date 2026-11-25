@@ -226,21 +226,38 @@ test("agy's own questions reach the person, and a message to it running steers i
   expect(spawns[0]?.env?.RELAY_STEER).toBe('prompt')
 })
 
-test('bypass mode approves what agy asks', async ($, on) => {
+test("bypass mode approves what agy asks, and runs its commands outside agy's sandbox, as Codex has full access there", async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns, { stdout: lines(CAPTURED), record: { mode: 'bypassPermissions' } })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   await runTurn($)
   expect(spawns[0]?.env?.RELAY_POLICY).toBe('allow')
   expect(spawns[0]?.env?.RELAY_AGENT_MODE).toBeUndefined()
+  expect(spawns[0]?.argv).toEqual(['node', `${ROOT}/relay/relay.mjs`, '--', 'agy', 'acp'])
 })
 
-test('dontAsk mode denies what agy asks', async ($, on) => {
+// Live on agy 1.5.16, every question denied: under its strict setting accept-edits made the edit and ran no command;
+// under request-review auto did both, and default neither. strict holds auto to its own rules.
+for (const [mode, agentMode] of [
+  ['acceptEdits', 'accept-edits'],
+  ['auto', 'auto'],
+] as const)
+  test(`${mode} mode runs agy in its own ${agentMode} mode, sandboxed, and asks the person what that mode leaves to them`, async ($, on) => {
+    const spawns: Spawn[] = []
+    arrange(on, spawns, { stdout: lines(CAPTURED), record: { mode } })
+    await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
+    await runTurn($)
+    expect(spawns[0]?.env).toMatchObject({ RELAY_AGENT_MODE: agentMode, RELAY_POLICY: 'ask' })
+    expect(spawns[0]?.argv).toEqual(['node', `${ROOT}/relay/relay.mjs`, '--', 'agy', 'acp', '--sandbox'])
+  })
+
+test('dontAsk mode denies what agy asks, sandboxed', async ($, on) => {
   const spawns: Spawn[] = []
   arrange(on, spawns, { stdout: lines(CAPTURED), record: { mode: 'dontAsk' } })
   await $.turn.start({ turnId: 't1', agentId: 'a1', text: 'go' })
   await runTurn($)
   expect(spawns[0]?.env?.RELAY_POLICY).toBe('deny')
+  expect(spawns[0]?.argv).toEqual(['node', `${ROOT}/relay/relay.mjs`, '--', 'agy', 'acp', '--sandbox'])
 })
 
 test('the session is saved, and a follow-up loads it', async ($, on) => {

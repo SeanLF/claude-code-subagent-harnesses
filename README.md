@@ -78,8 +78,9 @@ Claude has one tool for `via`'s 50 most recent agents, across sessions and proje
 ## Permissions
 
 - **Read-only:** Codex runs in its read-only sandbox with MCP servers and plugins off; OpenCode and pi get reading tools only.
-- **Bypass mode:** Codex runs with full access, no sandbox, as Claude Code itself does in bypass: its commands reach any file and the network.
+- **Bypass mode:** Codex runs with full access, no sandbox, as Claude Code itself does in bypass: its commands reach any file and the network. agy runs without its sandbox too, so its commands reach credentials such as `~/.kube`.
 - **Otherwise:** Codex works in its workspace sandbox and asks before going past it; OpenCode, pi and agy use their own permission settings. Codex also edits outside a Git repository.
+- **Accept-edits and auto modes:** agy runs in its own `accept-edits` or `auto` mode, so it stops asking about edits, or about edits and safe commands. Under agy's `strict` setting, `auto` still asks as `strict` does. Codex and OpenCode run as in default mode: Codex edits its workspace unasked already, and OpenCode has no such mode.
 - A harness's question (Codex past its sandbox, OpenCode where its config says `ask`, agy under `request-review` or `strict`) shows in Claude Code's dialog with only a one-time allow and a deny. There's no "always allow", so no approval outlives the run. No answer, or `claude -p`, is a deny. Bypass mode approves; don't-ask mode denies. The mode is set when the agent starts; a follow-up to an agent that finished takes the current one. pi never asks.
 - When a harness starts its own subagent, `via` approves that call without asking you.
 
@@ -88,7 +89,7 @@ Claude has one tool for `via`'s 50 most recent agents, across sessions and proje
 Each loads its own user config and instructions files (agy reads your global `AGENTS.md`).
 
 - `codex`: an interrupted command keeps running until the run ends. A subagent's task shows as its nested agent's prompt only with Codex's v1 subagent tools. Codex lets the model pick, and gpt-6-luna picks the v2 tools. These [send no task text](https://github.com/openai/codex/issues/61750), so the nested agent gets its title instead.
-- `agy`: commands run in Antigravity's sandbox, away from credentials such as `~/.kube`; its own file edits are not sandboxed. A command that runs past 10 seconds goes to the background, and agy waits for it before it answers; if it ends its turn first, the answer names the command. `thinking:` takes low, medium or high, for Gemini models only.
+- `agy`: commands run in Antigravity's sandbox, away from credentials such as `~/.kube`, except in bypass mode; its own file edits, and commands that write outside the project, are not held back by it. A command that runs past 10 seconds goes to the background, and agy waits for it before it answers; if it ends its turn first, the answer names the command. `thinking:` takes low, medium or high, for Gemini models only.
 - `opencode`: a read-only run replaces your own `OPENCODE_CONFIG_CONTENT`. An OpenCode background service that starts while a `via` OpenCode agent is working resumes the agent's turn as if it had died, so the turn runs twice ([anomalyco/opencode#51213](https://github.com/anomalyco/opencode/issues/51213)). Opening `opencode` starts one when none is running, and replaces one of another version, as after an upgrade. Start it (`opencode service start`, or `restart` after an upgrade) while no `via` agent is working.
 - `pi`: any model pi reaches by API key or `/login`. On a ChatGPT login it runs pi's own tools, not Codex's sandbox. `tools:` takes a pi tool list: one of only `read`, `grep`, `find`, `ls` is read-only and skips the project's `.pi` extensions, even in a project you trusted; any other, such as `-bash,read`, can edit and loads them.
 
