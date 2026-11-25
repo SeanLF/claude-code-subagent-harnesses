@@ -244,17 +244,28 @@ export async function questionClosed(w: Pick<Steps, 'jobs'>, ref: { agentId: str
   }
 }
 
+export const CALL_HOLD_MS = 15 * 60_000
+
 export async function answerCall(
   w: Steps,
   toolUseId: string | undefined,
   signal: AbortSignal,
   wait: (agentId: string, turnId: string) => Promise<void>,
+  now: () => number = Date.now,
 ): Promise<{ result: string; isError?: true } | { deny: string }> {
   const ref = toolUseId === undefined ? undefined : w.calls.get(toolUseId)
   const job = ref === undefined ? undefined : w.jobs.get(ref.agentId)
   if (ref === undefined || job === undefined)
     return { deny: 'This tool only reports a tool call an agent harness made; it does nothing when called.' }
   const unlend = lend(job, signal)
+  const until = now() + CALL_HOLD_MS
+  const input = ref.input ?? { kind: 'other', title: 'harness tool' }
+  const waiting: Mark = {
+    kind: 'call-start',
+    id: ref.id,
+    input: input.kind === 'wait' ? input : { kind: 'wait', title: `Waiting for ${input.title}` },
+    usage: null,
+  }
   try {
     for (;;) {
       const done = job.outputs.get(ref.id)
@@ -263,6 +274,11 @@ export async function answerCall(
         return done.failed ? { result: done.output || 'failed', isError: true } : { result: done.output || NO_OUTPUT }
       }
       if (job.final !== undefined || halted(job)) return { result: 'The harness run ended before this call finished.' }
+      if (now() >= until) {
+        job.held.unshift(waiting)
+        w.calls.delete(toolUseId as string)
+        return { result: `The harness tool is still running after ${CALL_HOLD_MS / 60_000} minutes; waiting on in the next step.` }
+      }
       const arrived = await Promise.race([
         read(job).then(
           () => true,
@@ -288,13 +304,7 @@ export async function answerCall(
       }
       if (r.value.kind === 'call-end') job.outputs.set(r.value.id, { output: r.value.output, failed: r.value.failed })
       else if (r.value.kind === 'spawn') {
-        const input = ref.input ?? { kind: 'other', title: 'harness tool' }
-        job.held.unshift(r.value, {
-          kind: 'call-start',
-          id: ref.id,
-          input: input.kind === 'wait' ? input : { kind: 'wait', title: `Waiting for ${input.title}` },
-          usage: null,
-        })
+        job.held.unshift(r.value, waiting)
         w.calls.delete(toolUseId as string)
         return { result: 'The harness tool is still running; showing its subagent now.' }
       } else job.held.push(r.value)
